@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Almoxarifado</title>
+    <style>
+        body {
+            font-family: Arial;
+            background: #f2f2f2;
+            padding: 20px;
+        }
+
+        .box {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            max-width: 600px;
+            margin: auto;
+            box-shadow: 0px 0px 10px #ccc;
+        }
+
+        button {
+            padding: 10px;
+            margin: 5px;
+            cursor: pointer;
+        }
+    </style>
+</head>
+
+<body>
+
+<div class="box">
+    <h2>📦 Sistema Almoxarifado</h2>
+
+    <button onclick="login()">Login</button>
+    <button onclick="verMateriais()">Materiais</button>
+    <button onclick="enviarReq()">Fazer Requisição</button>
+    <button onclick="minhasReq()">Minhas Requisições</button>
+
+    <pre id="resultado"></pre>
+</div>
+
+<script>
+
+const API = "http://127.0.0.1:8000";
+
+function login() {
+    fetch(API + "/login")
+    .then(r => r.text())
+    .then(data => document.getElementById("resultado").innerText = data);
+}
+
+function verMateriais() {
+    fetch(API + "/materiais")
+    .then(r => r.json())
+    .then(data => document.getElementById("resultado").innerText = JSON.stringify(data, null, 2));
+}
+
+function enviarReq() {
+    fetch(API + "/enviar", {method: "POST"})
+    .then(r => r.text())
+    .then(data => document.getElementById("resultado").innerText = data);
+}
+
+function minhasReq() {
+    fetch(API + "/minhas")
+    .then(r => r.json())
+    .then(data => document.getElementById("resultado").innerText = JSON.stringify(data, null, 2));
+}
+
+</script>
+
+</body>
+</html>
