@@ -74,31 +74,41 @@ def pegar_colunas(df):
 def login():
     return """
     <html>
-    <body style="font-family:Arial; display:flex; justify-content:center; align-items:center; height:100vh; background:#f4f6f9;">
-        <div style="background:white; padding:30px; border-radius:10px; width:300px;">
-            <h2>🔐 Login</h2>
+    <body style="font-family:Arial; padding:30px;">
 
-            <form method="post" action="/login">
-                <input name="usuario" placeholder="Usuário" style="width:100%; padding:8px;">
-                <br><br>
-                <input name="senha" type="password" placeholder="Senha" style="width:100%; padding:8px;">
-                <br><br>
-                <button style="width:100%; padding:10px; background:#111; color:white;">Entrar</button>
-            </form>
-        </div>
+        <h2>🔐 Login</h2>
+
+        <form method="post" action="/login">
+            <input name="usuario" placeholder="Usuário" style="width:100%; padding:8px;">
+            <br><br>
+
+            <input name="senha" type="password" placeholder="Senha" style="width:100%; padding:8px;">
+            <br><br>
+
+            <button style="width:100%; padding:10px; background:#111; color:white;">
+                Entrar
+            </button>
+
+        </form>
+
     </body>
     </html>
     """
 
+
 @app.post("/login")
 def login_post(request: Request, usuario: str = Form(...), senha: str = Form(...)):
-    if usuario in usuarios and usuarios[usuario]["senha"] == senha:
-      request.session["user"] = usuario
 
-      if usuarios[usuario]["tipo"] == "admin":
+    if usuario in usuarios and usuarios[usuario]["senha"] == senha:
+
+        request.session["user"] = usuario
+
+        if usuarios[usuario]["tipo"] == "admin":
             return RedirectResponse("/painel", status_code=303)
+
         else:
             return RedirectResponse("/materiais", status_code=303)
+
 
     return RedirectResponse("/", status_code=303)
 
