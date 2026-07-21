@@ -95,7 +95,7 @@ def login_post(request: Request, usuario: str = Form(...), senha: str = Form(...
     if usuario in usuarios and usuarios[usuario]["senha"] == senha:
       request.session["user"] = usuario
 
-        if usuarios[usuario]["tipo"] == "admin":
+      if usuarios[usuario]["tipo"] == "admin":
             return RedirectResponse("/painel", status_code=303)
         else:
             return RedirectResponse("/materiais", status_code=303)
