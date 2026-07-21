@@ -108,24 +108,88 @@ def login_post(request: Request, usuario: str = Form(...), senha: str = Form(...
 
 @app.get("/materiais", response_class=HTMLResponse)
 def materiais(request: Request):
+
     if not request.session.get("user"):
         return RedirectResponse("/")
 
-    df = carregar_excel()
-    tabela = df.to_html(index=False)
+    usuario = request.session.get("user")
 
     return f"""
     <html>
-    <body style="font-family:Arial; padding:20px;">
-        <h2>📦 Materiais</h2>
+    <head>
+    <style>
 
-        <a href="/requisicao">Nova Requisição</a> |
-        <a href="/minhas">📄 Minhas Requisições</a> |
-        <a href="/logout">Sair</a>
+    body {{
+        font-family: Arial;
+        background:#f4f6f9;
+        padding:30px;
+    }}
 
-        <br><br>
+    .card {{
+        background:white;
+        max-width:400px;
+        margin:auto;
+        padding:30px;
+        border-radius:12px;
+        box-shadow:0 3px 10px #ccc;
+        text-align:center;
+    }}
 
-        {tabela}
+    h2 {{
+        color:#333;
+    }}
+
+    p {{
+        color:#666;
+    }}
+
+    a {{
+        display:block;
+        margin:15px 0;
+        padding:14px;
+        background:#1976d2;
+        color:white;
+        text-decoration:none;
+        border-radius:8px;
+        font-size:16px;
+    }}
+
+    a:hover {{
+        background:#125aa0;
+    }}
+
+    .sair {{
+        background:#dc3545;
+    }}
+
+    </style>
+    </head>
+
+    <body>
+
+    <div class="card">
+
+        <h2>📦 Almoxarifado</h2>
+
+        <p>Usuário: <b>{usuario}</b></p>
+
+
+        <a href="/requisicao">
+            ➕ Nova Requisição
+        </a>
+
+
+        <a href="/minhas">
+            📄 Minhas Requisições
+        </a>
+
+
+        <a class="sair" href="/logout">
+            🚪 Sair
+        </a>
+
+    </div>
+
     </body>
     </html>
     """
