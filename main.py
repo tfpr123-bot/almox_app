@@ -1,21 +1,11 @@
-from fastapi import FastAPI, Form, Request
+from fastapi import FastAPI, Form
 from fastapi.responses import HTMLResponse, RedirectResponse
-from starlette.middleware.sessions import SessionMiddleware
 import pandas as pd
 import unicodedata
 from datetime import datetime
 import os
 
 app = FastAPI()
-
-# =========================
-# SESSÃO (CORRIGIDO)
-# =========================
-
-app.add_middleware(
-    SessionMiddleware,
-    secret_key="almox-secreto-123"
-)
 
 # =========================
 # USUÁRIOS
@@ -34,7 +24,9 @@ usuarios = {
     "BANHEIRO CENTRAL": {"senha": "123", "tipo": "setor"},
 }
 
+sessao = {"user": None}
 requisicoes = []
+
 ARQ = "requisicoes.xlsx"
 
 # =========================
@@ -78,24 +70,26 @@ def pegar_colunas(df):
 def login():
     return """
     <html>
-    <body style="font-family:Arial; padding:20px;">
-        <h2>🔐 Login</h2>
+    <body style="font-family:Arial; display:flex; justify-content:center; align-items:center; height:100vh; background:#f4f6f9;">
+        <div style="background:white; padding:30px; border-radius:10px; width:300px;">
+            <h2>🔐 Login</h2>
 
-        <form method="post" action="/login">
-            <input name="usuario" placeholder="Usuário" style="width:100%; padding:8px;">
-            <br><br>
-            <input name="senha" type="password" placeholder="Senha" style="width:100%; padding:8px;">
-            <br><br>
-            <button style="width:100%; padding:10px; background:#111; color:white;">Entrar</button>
-        </form>
+            <form method="post" action="/login">
+                <input name="usuario" placeholder="Usuário" style="width:100%; padding:8px;">
+                <br><br>
+                <input name="senha" type="password" placeholder="Senha" style="width:100%; padding:8px;">
+                <br><br>
+                <button style="width:100%; padding:10px; background:#111; color:white;">Entrar</button>
+            </form>
+        </div>
     </body>
     </html>
     """
 
 @app.post("/login")
-def login_post(request: Request, usuario: str = Form(...), senha: str = Form(...)):
+def login_post(usuario: str = Form(...), senha: str = Form(...)):
     if usuario in usuarios and usuarios[usuario]["senha"] == senha:
-        request.session["user"] = usuario
+        sessao["user"] = usuario
 
         if usuarios[usuario]["tipo"] == "admin":
             return RedirectResponse("/painel", status_code=303)
@@ -109,8 +103,8 @@ def login_post(request: Request, usuario: str = Form(...), senha: str = Form(...
 # =========================
 
 @app.get("/materiais", response_class=HTMLResponse)
-def materiais(request: Request):
-    if not request.session.get("user"):
+def materiais():
+    if not sessao.get("user"):
         return RedirectResponse("/")
 
     df = carregar_excel()
@@ -137,8 +131,8 @@ def materiais(request: Request):
 # =========================
 
 @app.get("/requisicao", response_class=HTMLResponse)
-def req(request: Request):
-    if not request.session.get("user"):
+def req():
+    if not sessao.get("user"):
         return RedirectResponse("/")
 
     df = carregar_excel()
@@ -172,7 +166,8 @@ def req(request: Request):
 # =========================
 
 @app.post("/enviar")
-def enviar(request: Request, codigo: str = Form(...), quantidade: int = Form(...)):
+def enviar(codigo: str = Form(...), quantidade: int = Form(...)):
+
     df = carregar_excel()
     cod, desc = pegar_colunas(df)
 
@@ -188,7 +183,7 @@ def enviar(request: Request, codigo: str = Form(...), quantidade: int = Form(...
 
     requisicoes.append({
         "id": len(requisicoes) + 1,
-        "user": request.session.get("user"),
+        "user": sessao["user"],
         "codigo": codigo,
         "descricao": item[desc],
         "quantidade": quantidade,
@@ -200,12 +195,13 @@ def enviar(request: Request, codigo: str = Form(...), quantidade: int = Form(...
     return RedirectResponse("/materiais", status_code=303)
 
 # =========================
-# MINHAS
+# MINHAS REQUISIÇÕES
 # =========================
 
 @app.get("/minhas", response_class=HTMLResponse)
-def minhas(request: Request):
-    if not request.session.get("user"):
+def minhas():
+
+    if not sessao.get("user"):
         return RedirectResponse("/")
 
     html = """
@@ -215,12 +211,17 @@ def minhas(request: Request):
 
         <table border="1" cellpadding="8" style="width:100%; background:white;">
         <tr style="background:#111; color:white;">
-            <th>ID</th><th>Código</th><th>Descrição</th><th>Qtd</th><th>Data</th><th>Status</th>
+            <th>ID</th>
+            <th>Código</th>
+            <th>Descrição</th>
+            <th>Qtd</th>
+            <th>Data</th>
+            <th>Status</th>
         </tr>
     """
 
     for r in requisicoes:
-        if r["user"] == request.session.get("user"):
+        if r["user"] == sessao["user"]:
 
             cor = ""
             if r["status"] == "PENDENTE":
@@ -245,14 +246,13 @@ def minhas(request: Request):
     return html
 
 # =========================
-# PAINEL ADMIN
+# PAINEL ADMIN (COM FILTRO)
 # =========================
 
 @app.get("/painel", response_class=HTMLResponse)
-def painel(request: Request, filtro: str = "TODOS"):
-    user = request.session.get("user")
+def painel(filtro: str = "TODOS"):
 
-    if not user or usuarios[user]["tipo"] != "admin":
+    if not sessao.get("user") or usuarios[sessao["user"]]["tipo"] != "admin":
         return RedirectResponse("/")
 
     total = len(requisicoes)
@@ -267,31 +267,116 @@ def painel(request: Request, filtro: str = "TODOS"):
     html = f"""
     <html>
     <body style="margin:0; font-family:Arial; background:#f4f6f9;">
-    <div style="padding:20px;">
+
+    <div style="position:fixed; left:0; top:0; width:220px; height:100%; background:#111; color:white; padding:20px;">
+        <h3>📦 Almox</h3>
+        <a href="/painel" style="color:white; display:block; margin:10px 0;">📊 Dashboard</a>
+        <a href="/logout" style="color:#ff6b6b; display:block; margin-top:20px;">🚪 Sair</a>
+    </div>
+
+    <div style="margin-left:240px; padding:20px;">
         <h2>📊 Dashboard</h2>
 
-        <p>Total: {total} | Pendentes: {pend} | Atendidos: {ok} | Recusados: {neg}</p>
+        <div style="display:flex; gap:10px;">
+            <div style="background:white; padding:10px; flex:1;">Total<br><b>{total}</b></div>
+            <div style="background:#fff3cd; padding:10px; flex:1;">Pendentes<br><b>{pend}</b></div>
+            <div style="background:#d4edda; padding:10px; flex:1;">Atendidos<br><b>{ok}</b></div>
+            <div style="background:#f8d7da; padding:10px; flex:1;">Recusados<br><b>{neg}</b></div>
+        </div>
 
-        <table border="1" cellpadding="8" style="width:100%; background:white;">
-        <tr>
-            <th>ID</th><th>User</th><th>Cod</th><th>Desc</th><th>Qtd</th><th>Status</th>
-        </tr>
+        <br>
+
+        <div style="margin-bottom:15px;">
+            <a href="/painel?filtro=TODOS">Todos</a> |
+            <a href="/painel?filtro=PENDENTE">Pendentes</a> |
+            <a href="/painel?filtro=ATENDIDO">Atendidos</a> |
+            <a href="/painel?filtro=RECUSADO">Recusados</a>
+        </div>
+
+        <table style="width:100%; background:white; border-collapse:collapse;">
+            <tr style="background:#111; color:white;">
+                <th>ID</th><th>User</th><th>Cod</th><th>Desc</th><th>Qtd</th><th>Status</th><th>Ações</th><th>🖨️</th>
+            </tr>
     """
 
     for r in lista:
+
+        cor = ""
+        if r["status"] == "PENDENTE":
+            cor = "background:#fffbea;"
+        elif r["status"] == "ATENDIDO":
+            cor = "background:#e6f7ea;"
+        elif r["status"] == "RECUSADO":
+            cor = "background:#fdeaea;"
+
         html += f"""
-        <tr>
+        <tr style="{cor}">
             <td>{r['id']}</td>
             <td>{r['user']}</td>
             <td>{r['codigo']}</td>
             <td>{r['descricao']}</td>
             <td>{r['quantidade']}</td>
             <td>{r['status']}</td>
+            <td>
+                <a href="/atender/{r['id']}">✔️</a> |
+                <a href="/recusar/{r['id']}">❌</a>
+            </td>
+            <td>
+                <a href="/imprimir/{r['id']}">🖨️</a>
+            </td>
         </tr>
         """
 
     html += "</table></div></body></html>"
     return html
+
+# =========================
+# IMPRIMIR
+# =========================
+
+@app.get("/imprimir/{id}", response_class=HTMLResponse)
+def imprimir(id: int):
+
+    req = None
+    for r in requisicoes:
+        if r["id"] == id:
+            req = r
+            break
+
+    if not req:
+        return HTMLResponse("Não encontrado")
+
+    return f"""
+    <html>
+    <head>
+    <script>
+        window.onload = function(){{
+            window.print();
+            window.onafterprint = function(){{
+                window.location.href = "/painel";
+            }}
+        }}
+    </script>
+    </head>
+
+    <body style="font-family:Arial; padding:30px;">
+        <h2>REQUISIÇÃO DE MATERIAL</h2>
+        <hr>
+
+        <p><b>ID:</b> {req['id']}</p>
+        <p><b>Setor:</b> {req['user']}</p>
+        <p><b>Data:</b> {req['data']}</p>
+        <p><b>Código:</b> {req['codigo']}</p>
+        <p><b>Material:</b> {req['descricao']}</p>
+        <p><b>Quantidade:</b> {req['quantidade']}</p>
+        <p><b>Status:</b> {req['status']}</p>
+
+        <br><br>
+        _________
+        <br>Almoxarifado
+    </body>
+    </html>
+    """
 
 # =========================
 # STATUS
@@ -320,6 +405,6 @@ def recusar(id: int):
 # =========================
 
 @app.get("/logout")
-def logout(request: Request):
-    request.session.clear()
+def logout():
+    sessao["user"] = None
     return RedirectResponse("/")
