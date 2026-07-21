@@ -1,4 +1,5 @@
-from fastapi import FastAPI, Form
+from fastapi import FastAPI, Form, Request
+from starlette.middleware.sessions import SessionMiddleware
 from fastapi.responses import HTMLResponse, RedirectResponse
 import pandas as pd
 import unicodedata
@@ -6,6 +7,10 @@ from datetime import datetime
 import os
 
 app = FastAPI()
+app.add_middleware(
+    SessionMiddleware,
+    secret_key="almox_app_chave_2026"
+)
 
 # =========================
 # USUÁRIOS
@@ -24,7 +29,6 @@ usuarios = {
     "BANHEIRO CENTRAL": {"senha": "123", "tipo": "setor"},
 }
 
-sessao = {"user": None}
 requisicoes = []
 
 ARQ = "requisicoes.xlsx"
@@ -87,9 +91,9 @@ def login():
     """
 
 @app.post("/login")
-def login_post(usuario: str = Form(...), senha: str = Form(...)):
+def login_post(request: Request, usuario: str = Form(...), senha: str = Form(...)):
     if usuario in usuarios and usuarios[usuario]["senha"] == senha:
-        sessao["user"] = usuario
+      request.session["user"] = usuario
 
         if usuarios[usuario]["tipo"] == "admin":
             return RedirectResponse("/painel", status_code=303)
@@ -103,8 +107,8 @@ def login_post(usuario: str = Form(...), senha: str = Form(...)):
 # =========================
 
 @app.get("/materiais", response_class=HTMLResponse)
-def materiais():
-    if not sessao.get("user"):
+def materiais(request: Request):
+    if not request.session.get("user"):
         return RedirectResponse("/")
 
     df = carregar_excel()
@@ -131,8 +135,8 @@ def materiais():
 # =========================
 
 @app.get("/requisicao", response_class=HTMLResponse)
-def req():
-    if not sessao.get("user"):
+def req(request: Request):
+    if not request.session.get("user"):
         return RedirectResponse("/")
 
     df = carregar_excel()
@@ -166,7 +170,7 @@ def req():
 # =========================
 
 @app.post("/enviar")
-def enviar(codigo: str = Form(...), quantidade: int = Form(...)):
+def enviar(request: Request, codigo: str = Form(...), quantidade: int = Form(...)):
 
     df = carregar_excel()
     cod, desc = pegar_colunas(df)
@@ -183,7 +187,7 @@ def enviar(codigo: str = Form(...), quantidade: int = Form(...)):
 
     requisicoes.append({
         "id": len(requisicoes) + 1,
-        "user": sessao["user"],
+        "user": request.session["user"],
         "codigo": codigo,
         "descricao": item[desc],
         "quantidade": quantidade,
@@ -199,9 +203,9 @@ def enviar(codigo: str = Form(...), quantidade: int = Form(...)):
 # =========================
 
 @app.get("/minhas", response_class=HTMLResponse)
-def minhas():
+def minhas(request: Request):
 
-    if not sessao.get("user"):
+    if not request.session.get("user"):
         return RedirectResponse("/")
 
     html = """
@@ -221,7 +225,7 @@ def minhas():
     """
 
     for r in requisicoes:
-        if r["user"] == sessao["user"]:
+        if r["user"] == request.session["user"]:
 
             cor = ""
             if r["status"] == "PENDENTE":
@@ -250,9 +254,9 @@ def minhas():
 # =========================
 
 @app.get("/painel", response_class=HTMLResponse)
-def painel(filtro: str = "TODOS"):
+def painel(request: Request, filtro: str = "TODOS"):
 
-    if not sessao.get("user") or usuarios[sessao["user"]]["tipo"] != "admin":
+    if not request.session.get("user") or usuarios[request.session["user"]]["tipo"] != "admin":
         return RedirectResponse("/")
 
     total = len(requisicoes)
@@ -405,6 +409,5 @@ def recusar(id: int):
 # =========================
 
 @app.get("/logout")
-def logout():
-    sessao["user"] = None
-    return RedirectResponse("/")
+def logout(request: Request):
+    request.session.clear()
