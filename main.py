@@ -104,10 +104,11 @@ def base_html(titulo, corpo, extra_head=""):
     </html>
     """
 
-def topbar(ativo=""):
-    def link(href, label, chave):
-        cls = "link"
-        return f'<a class="{cls}" href="{href}">{label}</a>'
+def topbar(tipo="setor"):
+    if tipo == "admin":
+        nav = '<a class="link" href="/painel">📊 Painel</a><a class="link" href="/logout">Sair</a>'
+    else:
+        nav = '<a class="link" href="/menu">⬅️ Menu</a><a class="link" href="/logout">Sair</a>'
     return f"""
     <div class="topbar">
         <div class="brand">
@@ -115,9 +116,7 @@ def topbar(ativo=""):
             <span>ALMOX</span>
         </div>
         <nav>
-            {link("/requisicao", "🧾 Nova requisição", "requisicao")}
-            {link("/minhas", "📄 Minhas requisições", "minhas")}
-            {link("/logout", "Sair", "logout")}
+            {nav}
         </nav>
     </div>
     """
@@ -174,9 +173,60 @@ def login_post(request: Request, usuario: str = Form(...), senha: str = Form(...
         if usuarios[usuario]["tipo"] == "admin":
             return RedirectResponse("/painel", status_code=303)
         else:
-            return RedirectResponse("/requisicao", status_code=303)
+            return RedirectResponse("/menu", status_code=303)
 
     return RedirectResponse("/", status_code=303)
+
+# =========================
+# MENU PRINCIPAL (usuário de setor)
+# =========================
+
+@app.get("/menu", response_class=HTMLResponse)
+def menu(request: Request):
+    if not request.session.get("user"):
+        return RedirectResponse("/")
+
+    if usuarios.get(request.session["user"], {}).get("tipo") == "admin":
+        return RedirectResponse("/painel")
+
+    corpo = f"""
+    <div class="menu-wrap">
+        <div class="menu-shell">
+            <img src="/static/logo.png.png">
+            <span class="eyebrow">Setor: {request.session['user']}</span>
+            <h2>O que você precisa fazer?</h2>
+            <p class="page-sub">Toque em uma das opções abaixo.</p>
+
+            <a class="menu-btn primary" href="/requisicao">
+                <span class="icon">🧾</span>
+                <span class="text">
+                    <span class="title">Nova requisição</span>
+                    <span class="sub">Pedir um material ao almoxarifado</span>
+                </span>
+                <span class="arrow">›</span>
+            </a>
+
+            <a class="menu-btn secondary" href="/minhas">
+                <span class="icon">📄</span>
+                <span class="text">
+                    <span class="title">Status da requisição</span>
+                    <span class="sub">Ver o andamento dos seus pedidos</span>
+                </span>
+                <span class="arrow">›</span>
+            </a>
+
+            <a class="menu-btn exit" href="/logout">
+                <span class="icon">🚪</span>
+                <span class="text">
+                    <span class="title">Sair</span>
+                    <span class="sub">Voltar para a tela de login</span>
+                </span>
+                <span class="arrow">›</span>
+            </a>
+        </div>
+    </div>
+    """
+    return base_html("Menu", corpo)
 
 # =========================
 # MATERIAIS
@@ -197,7 +247,7 @@ def materiais(request: Request):
     tabela = df.to_html(index=False, classes="tbl", border=0)
 
     corpo = f"""
-    {topbar("materiais")}
+    {topbar(usuarios.get(request.session["user"], {}).get("tipo", "setor"))}
     <div class="page">
         <span class="eyebrow">Catálogo</span>
         <h2>📦 Materiais</h2>
@@ -240,7 +290,7 @@ def req(request: Request):
         """
 
     corpo = f"""
-    {topbar("requisicao")}
+    {topbar("setor")}
     <div class="page page-narrow">
         <span class="eyebrow">Setor: {request.session['user']}</span>
         <h2>🧾 Nova requisição</h2>
@@ -379,7 +429,7 @@ def minhas(request: Request):
         """
 
     corpo = f"""
-    {topbar("minhas")}
+    {topbar("setor")}
     <div class="page">
         <span class="eyebrow">Setor: {request.session['user']}</span>
         <h2>📄 Minhas requisições</h2>
