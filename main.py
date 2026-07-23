@@ -4,8 +4,10 @@ from starlette.middleware.sessions import SessionMiddleware
 from fastapi.responses import HTMLResponse, RedirectResponse
 import pandas as pd
 import unicodedata
-from datetime import datetime
+from datetime import datetime, date, timedelta
+import calendar
 import os
+import json
 
 app = FastAPI()
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -441,6 +443,21 @@ def minhas(request: Request):
     """
     return base_html("Minhas requisições", corpo)
 
+def sidebar(ativo="dashboard"):
+    def item(href, label, chave):
+        cls = "nav-link active" if ativo == chave else "nav-link"
+        return f'<a class="{cls}" href="{href}">{label}</a>'
+    return f"""
+    <div class="sidebar">
+        <img src="/static/logo.png.png">
+        <span class="brand-tag">Painel admin</span>
+        {item("/painel", "📊 Dashboard", "dashboard")}
+        {item("/relatorio", "📈 Relatório", "relatorio")}
+        {item("/materiais", "📦 Materiais", "materiais")}
+        <a class="nav-link logout" href="/logout">🚪 Sair</a>
+    </div>
+    """
+
 # =========================
 # PAINEL ADMIN (COM FILTRO)
 # =========================
@@ -498,13 +515,7 @@ def painel(request: Request, filtro: str = "TODOS"):
 
     corpo = f"""
     <div class="admin-shell">
-        <div class="sidebar">
-            <img src="/static/logo.png.png">
-            <span class="brand-tag">Painel admin</span>
-            <a class="nav-link active" href="/painel">📊 Dashboard</a>
-            <a class="nav-link" href="/materiais">📦 Materiais</a>
-            <a class="nav-link logout" href="/logout">🚪 Sair</a>
-        </div>
+        {sidebar("dashboard")}
 
         <div class="admin-content">
             <span class="eyebrow">Visão geral</span>
@@ -544,6 +555,177 @@ def painel(request: Request, filtro: str = "TODOS"):
     </div>
     """
     return base_html("Painel admin", corpo)
+
+# =========================
+# RELATÓRIO (GRÁFICO POR PERÍODO)
+# =========================
+
+@app.get("/relatorio", response_class=HTMLResponse)
+def relatorio(request: Request, inicio: str = "", fim: str = ""):
+
+    if not request.session.get("user") or usuarios.get(request.session["user"], {}).get("tipo") != "admin":
+        return RedirectResponse("/")
+
+    hoje = date.today()
+
+    def parse_data_req(s):
+        for fmt in ("%d/%m/%Y %H:%M", "%d/%m/%Y"):
+            try:
+                return datetime.strptime(str(s), fmt).date()
+            except Exception:
+                continue
+        return None
+
+    def primeiro_dia_mes(d):
+        return d.replace(day=1)
+
+    def ultimo_dia_mes(d):
+        return date(d.year, d.month, calendar.monthrange(d.year, d.month)[1])
+
+    # período padrão: mês atual
+    inicio_d = primeiro_dia_mes(hoje)
+    fim_d = hoje
+    if inicio:
+        try:
+            inicio_d = date.fromisoformat(inicio)
+        except Exception:
+            pass
+    if fim:
+        try:
+            fim_d = date.fromisoformat(fim)
+        except Exception:
+            pass
+
+    if inicio_d > fim_d:
+        inicio_d, fim_d = fim_d, inicio_d
+
+    filtradas = []
+    for r in requisicoes:
+        d = parse_data_req(r.get("data"))
+        if d and inicio_d <= d <= fim_d:
+            filtradas.append(r)
+
+    resumo = {}
+    for r in filtradas:
+        setor = r["user"]
+        if setor not in resumo:
+            resumo[setor] = {"requisicoes": 0, "itens": 0}
+        resumo[setor]["requisicoes"] += 1
+        resumo[setor]["itens"] += int(r.get("quantidade") or 0)
+
+    setores_ordenados = sorted(resumo.items(), key=lambda x: x[1]["requisicoes"], reverse=True)
+    labels = [s for s, _ in setores_ordenados]
+    valores_req = [v["requisicoes"] for _, v in setores_ordenados]
+    valores_itens = [v["itens"] for _, v in setores_ordenados]
+
+    linhas_tabela = ""
+    for setor, v in setores_ordenados:
+        linhas_tabela += f"""
+        <tr>
+            <td>{setor}</td>
+            <td class="mono">{v['requisicoes']}</td>
+            <td class="mono">{v['itens']}</td>
+        </tr>
+        """
+
+    if not setores_ordenados:
+        tabela_html = '<div class="empty-state">Nenhuma requisição encontrada nesse período.</div>'
+        grafico_html = '<div class="empty-state">Sem dados para exibir no gráfico.</div>'
+    else:
+        tabela_html = f"""
+        <table class="tbl">
+            <tr><th>Setor</th><th>Requisições</th><th>Itens solicitados</th></tr>
+            {linhas_tabela}
+        </table>
+        """
+        grafico_html = '<canvas id="graficoSetores" height="110"></canvas>'
+
+    def periodo(dias_ini, dias_fim, chave):
+        ativo = "active" if inicio == dias_ini.isoformat() and fim == dias_fim.isoformat() else ""
+        return f'<a class="filter-chip {ativo}" href="/relatorio?inicio={dias_ini.isoformat()}&fim={dias_fim.isoformat()}">{chave}</a>'
+
+    mes_passado_ref = (primeiro_dia_mes(hoje) - timedelta(days=1))
+
+    corpo = f"""
+    <div class="admin-shell">
+        {sidebar("relatorio")}
+
+        <div class="admin-content">
+            <span class="eyebrow">Comparativo por período</span>
+            <h2>📈 Relatório de requisições</h2>
+            <p class="page-sub">Compare a quantidade de requisições feitas por cada setor no período selecionado.</p>
+
+            <form method="get" action="/relatorio" class="card" style="padding:16px 18px; margin-bottom:16px; display:flex; gap:12px; align-items:flex-end; flex-wrap:wrap;">
+                <div>
+                    <span class="label" style="font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--ink-soft); display:block; margin-bottom:4px;">De</span>
+                    <input class="field" style="margin-bottom:0;" type="date" name="inicio" value="{inicio_d.isoformat()}">
+                </div>
+                <div>
+                    <span class="label" style="font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--ink-soft); display:block; margin-bottom:4px;">Até</span>
+                    <input class="field" style="margin-bottom:0;" type="date" name="fim" value="{fim_d.isoformat()}">
+                </div>
+                <button class="btn btn-dark" type="submit">Aplicar</button>
+            </form>
+
+            <div class="filter-row">
+                {periodo(primeiro_dia_mes(hoje), hoje, "Este mês")}
+                {periodo(primeiro_dia_mes(mes_passado_ref), ultimo_dia_mes(mes_passado_ref), "Mês passado")}
+                {periodo(date(hoje.year, 1, 1), hoje, "Este ano")}
+                {periodo(date(2000, 1, 1), hoje, "Todos")}
+            </div>
+
+            <div class="card" style="padding:20px; margin-bottom:20px;">
+                {grafico_html}
+            </div>
+
+            <div class="table-wrap">
+                {tabela_html}
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+    <script>
+        const labels = {labels!r};
+        const dadosReq = {valores_req!r};
+        const dadosItens = {valores_itens!r};
+        const canvas = document.getElementById('graficoSetores');
+        if (canvas) {{
+            new Chart(canvas, {{
+                type: 'bar',
+                data: {{
+                    labels: labels,
+                    datasets: [
+                        {{
+                            label: 'Requisições',
+                            data: dadosReq,
+                            backgroundColor: '#E85D1F',
+                            borderRadius: 6,
+                            maxBarThickness: 42
+                        }},
+                        {{
+                            label: 'Itens solicitados',
+                            data: dadosItens,
+                            backgroundColor: '#1E2128',
+                            borderRadius: 6,
+                            maxBarThickness: 42
+                        }}
+                    ]
+                }},
+                options: {{
+                    responsive: true,
+                    plugins: {{
+                        legend: {{ position: 'top', labels: {{ font: {{ family: 'Inter' }} }} }}
+                    }},
+                    scales: {{
+                        y: {{ beginAtZero: true, ticks: {{ precision: 0 }} }}
+                    }}
+                }}
+            }});
+        }}
+    </script>
+    """
+    return base_html("Relatório", corpo)
 
 # =========================
 # IMPRIMIR
