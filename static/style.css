@@ -15,9 +15,9 @@
   --ink-soft:      #6B6E76;
   --line:          #DEDACE;
 
-  --amber:         #E2A73B;
-  --amber-dark:    #C68A24;
-  --amber-soft:    #FBEED2;
+  --amber:         #E85D1F;
+  --amber-dark:    #C24A15;
+  --amber-soft:    #FCE1D3;
 
   --green:         #4C9A6A;
   --green-soft:    #E1F1E6;
@@ -74,7 +74,7 @@ a { color: inherit; }
 
 .btn-primary {
   background: var(--amber);
-  color: #29200A;
+  color: #FFFFFF;
 }
 .btn-primary:hover { background: var(--amber-dark); }
 
@@ -239,13 +239,90 @@ a { color: inherit; }
   padding: 12px 14px;
   font-size: 14px;
   margin-bottom: 14px;
-  color: #4A3A0F;
+  color: #7A2F10;
 }
 .selected-box.empty {
   border-color: var(--line);
   background: var(--paper-2);
   color: var(--ink-soft);
 }
+
+/* ---------- menu principal (usuário de setor) ---------- */
+.menu-wrap {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background:
+    radial-gradient(circle at 1px 1px, rgba(30,33,40,0.06) 1px, transparent 0) 0 0/22px 22px,
+    var(--paper);
+  padding: 24px;
+}
+.menu-shell {
+  width: 100%;
+  max-width: 400px;
+  text-align: center;
+}
+.menu-shell img { max-width: 110px; margin-bottom: 10px; }
+.menu-shell h2 { font-size: 20px; margin-bottom: 2px; }
+.menu-shell .page-sub { margin-bottom: 26px; }
+
+.menu-btn {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  width: 100%;
+  text-align: left;
+  padding: 20px 20px;
+  margin-bottom: 14px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--line);
+  background: var(--card);
+  text-decoration: none;
+  color: var(--ink);
+  box-shadow: var(--shadow-card);
+  min-height: 72px;
+  -webkit-tap-highlight-color: transparent;
+  transition: transform .08s ease, box-shadow .15s ease, border-color .15s ease;
+}
+.menu-btn:active { transform: scale(0.98); }
+
+.menu-btn .icon {
+  flex-shrink: 0;
+  width: 48px;
+  height: 48px;
+  border-radius: var(--radius-md);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+}
+.menu-btn .text { flex: 1; min-width: 0; }
+.menu-btn .title {
+  font-family: 'Space Grotesk', sans-serif;
+  font-weight: 600;
+  font-size: 16px;
+  display: block;
+}
+.menu-btn .sub {
+  font-size: 13px;
+  color: var(--ink-soft);
+  display: block;
+  margin-top: 2px;
+}
+.menu-btn .arrow {
+  flex-shrink: 0;
+  color: var(--ink-soft);
+  font-size: 18px;
+}
+
+.menu-btn.primary { border-color: var(--amber); }
+.menu-btn.primary .icon { background: var(--amber-soft); color: var(--amber-dark); }
+
+.menu-btn.secondary .icon { background: var(--paper-2); color: var(--ink); }
+
+.menu-btn.exit { margin-top: 22px; border-style: dashed; }
+.menu-btn.exit .icon { background: var(--red-soft); color: #7C2E28; }
 
 /* ---------- badges de status ---------- */
 .badge {
