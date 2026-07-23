@@ -98,7 +98,7 @@ def login():
     <html>
     <body style="font-family:Arial; display:flex; justify-content:center; align-items:center; height:100vh; background:#f4f6f9;">
         <div style="background:white; padding:30px; border-radius:10px; width:300px; text-align:center;">
-            <img src="/static/logo.png" style="max-width:200px; margin-bottom:15px;">
+            <img src="/static/logo.png.png" style="max-width:200px; margin-bottom:15px;">
             <h2>🔐 Login</h2>
 
             <form method="post" action="/login">
@@ -194,7 +194,7 @@ def req(request: Request):
     <html>
     <body style="font-family:Arial; padding:20px; max-width:500px; margin:0 auto;">
         <div style="text-align:center; margin-bottom:10px;">
-            <img src="/static/logo.png" style="max-width:150px;">
+            <img src="/static/logo.png.png" style="max-width:150px;">
         </div>
         <h2>🧾 Nova Requisição</h2>
 
@@ -309,7 +309,7 @@ def minhas(request: Request):
     <html>
     <body style="font-family:Arial; background:#f4f6f9; padding:20px;">
         <div style="text-align:center; margin-bottom:10px;">
-            <img src="/static/logo.png" style="max-width:150px;">
+            <img src="/static/logo.png.png" style="max-width:150px;">
         </div>
         <h2>📄 Minhas Requisições</h2>
 
@@ -373,7 +373,7 @@ def painel(request: Request, filtro: str = "TODOS"):
     <body style="margin:0; font-family:Arial; background:#f4f6f9;">
 
     <div style="position:fixed; left:0; top:0; width:220px; height:100%; background:#111; color:white; padding:20px;">
-        <img src="/static/logo.png" style="max-width:100%; margin-bottom:10px;">
+        <img src="/static/logo.png.png" style="max-width:100%; margin-bottom:10px;">
         <h3>📦 Almox</h3>
         <a href="/painel" style="color:white; display:block; margin:10px 0;">📊 Dashboard</a>
         <a href="/logout" style="color:#ff6b6b; display:block; margin-top:20px;">🚪 Sair</a>
