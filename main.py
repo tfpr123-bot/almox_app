@@ -77,16 +77,71 @@ def pegar_colunas(df):
         )
     return cods[0], descs[0]
 
-def pagina_erro(msg):
-    return HTMLResponse(f"""
+# =========================
+# TEMA / LAYOUT BASE
+# =========================
+
+FONTS = """
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
+"""
+
+def base_html(titulo, corpo, extra_head=""):
+    return f"""
     <html>
-    <body style="font-family:Arial; padding:30px;">
-        <h2>⚠️ Ops, deu um problema</h2>
-        <p>{msg}</p>
-        <a href="/materiais">Voltar</a>
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>{titulo} · Almox</title>
+        {FONTS}
+        <link rel="stylesheet" href="/static/style.css">
+        {extra_head}
+    </head>
+    <body>
+        {corpo}
     </body>
     </html>
-    """)
+    """
+
+def topbar(ativo=""):
+    def link(href, label, chave):
+        cls = "link"
+        return f'<a class="{cls}" href="{href}">{label}</a>'
+    return f"""
+    <div class="topbar">
+        <div class="brand">
+            <img src="/static/logo.png.png">
+            <span>ALMOX</span>
+        </div>
+        <nav>
+            {link("/requisicao", "🧾 Nova requisição", "requisicao")}
+            {link("/minhas", "📄 Minhas requisições", "minhas")}
+            {link("/logout", "Sair", "logout")}
+        </nav>
+    </div>
+    """
+
+def pagina_erro(msg):
+    corpo = f"""
+    <div class="error-wrap">
+        <div class="card error-card">
+            <div class="icon">⚠️</div>
+            <h2>Ops, deu um problema</h2>
+            <p>{msg}</p>
+            <a class="btn btn-dark btn-block" href="/materiais">Voltar</a>
+        </div>
+    </div>
+    """
+    return HTMLResponse(base_html("Erro", corpo))
+
+def badge(status):
+    classe = {
+        "PENDENTE": "badge-pendente",
+        "ATENDIDO": "badge-atendido",
+        "RECUSADO": "badge-recusado",
+    }.get(status, "badge-pendente")
+    return f'<span class="badge {classe}">{status}</span>'
 
 # =========================
 # LOGIN
@@ -94,24 +149,22 @@ def pagina_erro(msg):
 
 @app.get("/", response_class=HTMLResponse)
 def login():
-    return """
-    <html>
-    <body style="font-family:Arial; display:flex; justify-content:center; align-items:center; height:100vh; background:#f4f6f9;">
-        <div style="background:white; padding:30px; border-radius:10px; width:300px; text-align:center;">
-            <img src="/static/logo.png.png" style="max-width:200px; margin-bottom:15px;">
-            <h2>🔐 Login</h2>
+    corpo = f"""
+    <div class="login-wrap">
+        <div class="card login-card">
+            <img src="/static/logo.png.png">
+            <span class="eyebrow">Controle de almoxarifado</span>
+            <h2>Entrar no sistema</h2>
 
             <form method="post" action="/login">
-                <input name="usuario" placeholder="Usuário" style="width:100%; padding:8px;">
-                <br><br>
-                <input name="senha" type="password" placeholder="Senha" style="width:100%; padding:8px;">
-                <br><br>
-                <button style="width:100%; padding:10px; background:#111; color:white;">Entrar</button>
+                <input class="field" name="usuario" placeholder="Usuário" autocomplete="off">
+                <input class="field" name="senha" type="password" placeholder="Senha">
+                <button class="btn btn-primary btn-block" type="submit">Entrar</button>
             </form>
         </div>
-    </body>
-    </html>
+    </div>
     """
+    return base_html("Login", corpo)
 
 @app.post("/login")
 def login_post(request: Request, usuario: str = Form(...), senha: str = Form(...)):
@@ -141,23 +194,20 @@ def materiais(request: Request):
     except ValueError as e:
         return pagina_erro(str(e))
 
-    tabela = df.to_html(index=False)
+    tabela = df.to_html(index=False, classes="tbl", border=0)
 
-    return f"""
-    <html>
-    <body style="font-family:Arial; padding:20px;">
+    corpo = f"""
+    {topbar("materiais")}
+    <div class="page">
+        <span class="eyebrow">Catálogo</span>
         <h2>📦 Materiais</h2>
-
-        <a href="/requisicao">Nova Requisição</a> |
-        <a href="/minhas">📄 Minhas Requisições</a> |
-        <a href="/logout">Sair</a>
-
-        <br><br>
-
-        {tabela}
-    </body>
-    </html>
+        <p class="page-sub">Consulta geral de itens disponíveis no almoxarifado.</p>
+        <div class="table-wrap">
+            {tabela}
+        </div>
+    </div>
     """
+    return base_html("Materiais", corpo)
 
 # =========================
 # REQUISIÇÃO
@@ -184,73 +234,68 @@ def req(request: Request):
         un = f" ({r[col_un]})" if col_un else ""
         itens_html += f"""
         <div class="item" data-codigo="{r[cod]}" data-desc="{r[desc]}{un}"
-             onclick="selecionar(this)"
-             style="padding:10px; border-bottom:1px solid #eee; cursor:pointer;">
-            <b>{r[cod]}</b> - {r[desc]}{un}
+             onclick="selecionar(this)">
+            <span class="code">{r[cod]}</span>{r[desc]}{un}
         </div>
         """
 
-    return f"""
-    <html>
-    <body style="font-family:Arial; padding:20px; max-width:500px; margin:0 auto;">
-        <div style="text-align:center; margin-bottom:10px;">
-            <img src="/static/logo.png.png" style="max-width:150px;">
+    corpo = f"""
+    {topbar("requisicao")}
+    <div class="page page-narrow">
+        <span class="eyebrow">Setor: {request.session['user']}</span>
+        <h2>🧾 Nova requisição</h2>
+        <p class="page-sub">Busque o material, selecione na lista e informe a quantidade.</p>
+
+        <div class="search-wrap">
+            <input class="field" id="busca" type="text" placeholder="Buscar material por nome ou código..."
+                   oninput="filtrar()" autocomplete="off">
         </div>
-        <h2>🧾 Nova Requisição</h2>
 
-        <input id="busca" type="text" placeholder="🔎 Buscar material por nome..."
-               oninput="filtrar()" autocomplete="off"
-               style="width:100%; padding:10px; box-sizing:border-box; margin-bottom:10px; font-size:16px;">
-
-        <div id="lista" style="max-height:300px; overflow-y:auto; border:1px solid #ddd; border-radius:6px; margin-bottom:15px;">
+        <div id="lista" class="item-list">
             {itens_html}
         </div>
 
-        <form method="post" action="/enviar" onsubmit="return validar()">
-            <div id="selecionado" style="margin-bottom:10px; font-weight:bold; color:#111;">Nenhum item selecionado</div>
+        <form method="post" action="/enviar" onsubmit="return validar()" style="margin-top:16px;">
+            <div id="selecionado" class="selected-box empty">Nenhum item selecionado</div>
             <input type="hidden" name="codigo" id="codigo">
 
-            <input type="number" name="quantidade" min="1" placeholder="Quantidade" required
-                   style="width:100%; padding:10px; box-sizing:border-box; font-size:16px;">
-            <br><br>
-            <button style="width:100%; padding:12px; background:#111; color:white; border:none; border-radius:6px; font-size:16px;">Enviar Requisição</button>
+            <input class="field" type="number" name="quantidade" min="1" placeholder="Quantidade" required>
+            <button class="btn btn-primary btn-block" type="submit">Enviar requisição</button>
         </form>
+    </div>
 
-        <br>
-        <a href="/minhas">📄 Ver status das minhas requisições</a> |
-        <a href="/logout">Sair</a>
+    <script>
+    function filtrar() {{
+        const termo = document.getElementById('busca').value.toUpperCase();
+        const itens = document.querySelectorAll('.item');
+        itens.forEach(function(item) {{
+            const desc = item.getAttribute('data-desc').toUpperCase();
+            const cod = item.getAttribute('data-codigo').toUpperCase();
+            item.style.display = (desc.includes(termo) || cod.includes(termo)) ? '' : 'none';
+        }});
+    }}
 
-        <script>
-        function filtrar() {{
-            const termo = document.getElementById('busca').value.toUpperCase();
-            const itens = document.querySelectorAll('.item');
-            itens.forEach(function(item) {{
-                const desc = item.getAttribute('data-desc').toUpperCase();
-                const cod = item.getAttribute('data-codigo').toUpperCase();
-                item.style.display = (desc.includes(termo) || cod.includes(termo)) ? '' : 'none';
-            }});
+    function selecionar(el) {{
+        document.querySelectorAll('.item').forEach(function(i) {{
+            i.classList.remove('is-selected');
+        }});
+        el.classList.add('is-selected');
+        document.getElementById('codigo').value = el.getAttribute('data-codigo');
+        const box = document.getElementById('selecionado');
+        box.classList.remove('empty');
+        box.innerText = '✅ ' + el.getAttribute('data-desc');
+    }}
+
+    function validar() {{
+        if (!document.getElementById('codigo').value) {{
+            alert('Selecione um material na lista antes de enviar.');
+            return false;
         }}
-
-        function selecionar(el) {{
-            document.querySelectorAll('.item').forEach(function(i) {{
-                i.style.background = '';
-            }});
-            el.style.background = '#e6f0ff';
-            document.getElementById('codigo').value = el.getAttribute('data-codigo');
-            document.getElementById('selecionado').innerText = '✅ ' + el.getAttribute('data-desc');
-        }}
-
-        function validar() {{
-            if (!document.getElementById('codigo').value) {{
-                alert('Selecione um material na lista antes de enviar.');
-                return false;
-            }}
-            return true;
-        }}
-        </script>
-    </body>
-    </html>
+        return true;
+    }}
+    </script>
     """
+    return base_html("Nova requisição", corpo)
 
 # =========================
 # ENVIAR
@@ -305,49 +350,46 @@ def minhas(request: Request):
     if not request.session.get("user"):
         return RedirectResponse("/")
 
-    html = """
-    <html>
-    <body style="font-family:Arial; background:#f4f6f9; padding:20px;">
-        <div style="text-align:center; margin-bottom:10px;">
-            <img src="/static/logo.png.png" style="max-width:150px;">
-        </div>
-        <h2>📄 Minhas Requisições</h2>
-
-        <table border="1" cellpadding="8" style="width:100%; background:white;">
-        <tr style="background:#111; color:white;">
-            <th>ID</th>
-            <th>Código</th>
-            <th>Descrição</th>
-            <th>Qtd</th>
-            <th>Data</th>
-            <th>Status</th>
-        </tr>
-    """
-
+    linhas = ""
+    tem_linha = False
     for r in requisicoes:
         if r["user"] == request.session["user"]:
-
-            cor = ""
-            if r["status"] == "PENDENTE":
-                cor = "background:#fff3cd;"
-            elif r["status"] == "ATENDIDO":
-                cor = "background:#d4edda;"
-            elif r["status"] == "RECUSADO":
-                cor = "background:#f8d7da;"
-
-            html += f"""
-            <tr style="{cor}">
-                <td>{r['id']}</td>
-                <td>{r['codigo']}</td>
+            tem_linha = True
+            linhas += f"""
+            <tr>
+                <td class="mono">#{r['id']}</td>
+                <td class="mono">{r['codigo']}</td>
                 <td>{r['descricao']}</td>
                 <td>{r['quantidade']}</td>
                 <td>{r['data']}</td>
-                <td>{r['status']}</td>
+                <td>{badge(r['status'])}</td>
             </tr>
             """
 
-    html += "</table><br><a href='/requisicao'>🧾 Nova Requisição</a> | <a href='/logout'>Sair</a></body></html>"
-    return html
+    if not tem_linha:
+        conteudo_tabela = '<div class="empty-state">Você ainda não enviou nenhuma requisição.</div>'
+    else:
+        conteudo_tabela = f"""
+        <table class="tbl">
+            <tr>
+                <th>ID</th><th>Código</th><th>Descrição</th><th>Qtd</th><th>Data</th><th>Status</th>
+            </tr>
+            {linhas}
+        </table>
+        """
+
+    corpo = f"""
+    {topbar("minhas")}
+    <div class="page">
+        <span class="eyebrow">Setor: {request.session['user']}</span>
+        <h2>📄 Minhas requisições</h2>
+        <p class="page-sub">Acompanhe o status de tudo o que você já solicitou.</p>
+        <div class="table-wrap">
+            {conteudo_tabela}
+        </div>
+    </div>
+    """
+    return base_html("Minhas requisições", corpo)
 
 # =========================
 # PAINEL ADMIN (COM FILTRO)
@@ -368,79 +410,100 @@ def painel(request: Request, filtro: str = "TODOS"):
     if filtro != "TODOS":
         lista = [r for r in requisicoes if r["status"] == filtro]
 
-    html = f"""
-    <html>
-    <body style="margin:0; font-family:Arial; background:#f4f6f9;">
+    def chip(valor, label):
+        ativo = "active" if filtro == valor else ""
+        return f'<a class="filter-chip {ativo}" href="/painel?filtro={valor}">{label}</a>'
 
-    <div style="position:fixed; left:0; top:0; width:220px; height:100%; background:#111; color:white; padding:20px;">
-        <img src="/static/logo.png.png" style="max-width:100%; margin-bottom:10px;">
-        <h3>📦 Almox</h3>
-        <a href="/painel" style="color:white; display:block; margin:10px 0;">📊 Dashboard</a>
-        <a href="/logout" style="color:#ff6b6b; display:block; margin-top:20px;">🚪 Sair</a>
-    </div>
-
-    <div style="margin-left:240px; padding:20px;">
-        <h2>📊 Dashboard</h2>
-
-        <div style="display:flex; gap:10px;">
-            <div style="background:white; padding:10px; flex:1;">Total<br><b>{total}</b></div>
-            <div style="background:#fff3cd; padding:10px; flex:1;">Pendentes<br><b>{pend}</b></div>
-            <div style="background:#d4edda; padding:10px; flex:1;">Atendidos<br><b>{ok}</b></div>
-            <div style="background:#f8d7da; padding:10px; flex:1;">Recusados<br><b>{neg}</b></div>
-        </div>
-
-        <br>
-
-        <div style="margin-bottom:15px;">
-            <a href="/painel?filtro=TODOS">Todos</a> |
-            <a href="/painel?filtro=PENDENTE">Pendentes</a> |
-            <a href="/painel?filtro=ATENDIDO">Atendidos</a> |
-            <a href="/painel?filtro=RECUSADO">Recusados</a>
-        </div>
-
-        <table style="width:100%; background:white; border-collapse:collapse;">
-            <tr style="background:#111; color:white;">
-                <th>ID</th><th>User</th><th>Cod</th><th>Desc</th><th>Qtd</th><th>Status</th><th>Ações</th><th>🖨️</th>
-            </tr>
-    """
-
+    linhas = ""
     for r in lista:
-
-        cor = ""
-        if r["status"] == "PENDENTE":
-            cor = "background:#fffbea;"
-        elif r["status"] == "ATENDIDO":
-            cor = "background:#e6f7ea;"
-        elif r["status"] == "RECUSADO":
-            cor = "background:#fdeaea;"
-
-        html += f"""
-        <tr style="{cor}">
-            <td>{r['id']}</td>
+        linhas += f"""
+        <tr>
+            <td class="mono">#{r['id']}</td>
             <td>{r['user']}</td>
-            <td>{r['codigo']}</td>
+            <td class="mono">{r['codigo']}</td>
             <td>{r['descricao']}</td>
             <td>{r['quantidade']}</td>
-            <td>{r['status']}</td>
+            <td>{badge(r['status'])}</td>
             <td>
-                <a href="/atender/{r['id']}">✔️</a> |
-                <a href="/recusar/{r['id']}">❌</a>
+                <div class="row-actions">
+                    <a class="btn btn-icon btn-approve" href="/atender/{r['id']}">✔️ Atender</a>
+                    <a class="btn btn-icon btn-reject" href="/recusar/{r['id']}">❌ Recusar</a>
+                </div>
             </td>
-            <td>
-                <a href="/imprimir/{r['id']}">🖨️</a>
-            </td>
+            <td><a class="btn btn-icon btn-print" href="/imprimir/{r['id']}">🖨️</a></td>
         </tr>
         """
 
-    html += "</table></div></body></html>"
-    return html
+    if not lista:
+        tabela_html = '<div class="empty-state">Nenhuma requisição encontrada para este filtro.</div>'
+    else:
+        tabela_html = f"""
+        <table class="tbl">
+            <tr>
+                <th>ID</th><th>Setor</th><th>Código</th><th>Descrição</th><th>Qtd</th><th>Status</th><th>Ações</th><th></th>
+            </tr>
+            {linhas}
+        </table>
+        """
+
+    corpo = f"""
+    <div class="admin-shell">
+        <div class="sidebar">
+            <img src="/static/logo.png.png">
+            <span class="brand-tag">Painel admin</span>
+            <a class="nav-link active" href="/painel">📊 Dashboard</a>
+            <a class="nav-link" href="/materiais">📦 Materiais</a>
+            <a class="nav-link logout" href="/logout">🚪 Sair</a>
+        </div>
+
+        <div class="admin-content">
+            <span class="eyebrow">Visão geral</span>
+            <h2>📊 Dashboard de requisições</h2>
+            <p class="page-sub">Acompanhe, atenda e recuse os pedidos dos setores.</p>
+
+            <div class="stat-row">
+                <div class="stat-card">
+                    <span class="label">Total</span>
+                    <span class="num">{total}</span>
+                </div>
+                <div class="stat-card accent-pendente">
+                    <span class="label">Pendentes</span>
+                    <span class="num">{pend}</span>
+                </div>
+                <div class="stat-card accent-atendido">
+                    <span class="label">Atendidos</span>
+                    <span class="num">{ok}</span>
+                </div>
+                <div class="stat-card accent-recusado">
+                    <span class="label">Recusados</span>
+                    <span class="num">{neg}</span>
+                </div>
+            </div>
+
+            <div class="filter-row">
+                {chip("TODOS", "Todos")}
+                {chip("PENDENTE", "Pendentes")}
+                {chip("ATENDIDO", "Atendidos")}
+                {chip("RECUSADO", "Recusados")}
+            </div>
+
+            <div class="table-wrap">
+                {tabela_html}
+            </div>
+        </div>
+    </div>
+    """
+    return base_html("Painel admin", corpo)
 
 # =========================
 # IMPRIMIR
 # =========================
 
 @app.get("/imprimir/{id}", response_class=HTMLResponse)
-def imprimir(id: int):
+def imprimir(request: Request, id: int):
+
+    if not request.session.get("user"):
+        return RedirectResponse("/")
 
     req = None
     for r in requisicoes:
@@ -451,37 +514,39 @@ def imprimir(id: int):
     if not req:
         return pagina_erro("Requisição não encontrada.")
 
-    return f"""
-    <html>
-    <head>
-    <script>
-        window.onload = function(){{
-            window.print();
-            window.onafterprint = function(){{
-                window.location.href = "/painel";
-            }}
-        }}
-    </script>
-    </head>
+    status_classe = req["status"].lower()
 
-    <body style="font-family:Arial; padding:30px;">
+    corpo = f"""
+    <div class="ticket">
+        <span class="stamp {status_classe}">{req['status']}</span>
+        <span class="eyebrow">Ficha de requisição</span>
         <h2>REQUISIÇÃO DE MATERIAL</h2>
-        <hr>
 
-        <p><b>ID:</b> {req['id']}</p>
-        <p><b>Setor:</b> {req['user']}</p>
-        <p><b>Data:</b> {req['data']}</p>
-        <p><b>Código:</b> {req['codigo']}</p>
-        <p><b>Material:</b> {req['descricao']}</p>
-        <p><b>Quantidade:</b> {req['quantidade']}</p>
-        <p><b>Status:</b> {req['status']}</p>
+        <div class="row"><span class="k">ID</span><span class="v mono">#{req['id']}</span></div>
+        <div class="row"><span class="k">Setor</span><span class="v">{req['user']}</span></div>
+        <div class="row"><span class="k">Data</span><span class="v">{req['data']}</span></div>
+        <div class="row"><span class="k">Código</span><span class="v mono">{req['codigo']}</span></div>
+        <div class="row"><span class="k">Material</span><span class="v">{req['descricao']}</span></div>
+        <div class="row"><span class="k">Quantidade</span><span class="v">{req['quantidade']}</span></div>
 
-        <br><br>
-        _________
-        <br>Almoxarifado
-    </body>
-    </html>
+        <div class="sig">
+            <div class="line"></div>
+            Almoxarifado
+        </div>
+    </div>
     """
+
+    extra = """
+    <script>
+        window.onload = function(){
+            window.print();
+            window.onafterprint = function(){
+                window.location.href = "/painel";
+            }
+        }
+    </script>
+    """
+    return base_html("Imprimir requisição", corpo, extra_head=extra)
 
 # =========================
 # STATUS
