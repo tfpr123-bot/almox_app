@@ -688,7 +688,6 @@ def relatorio(request: Request, inicio: str = "", fim: str = ""):
     <script>
         const labels = {labels!r};
         const dadosReq = {valores_req!r};
-        const dadosItens = {valores_itens!r};
         const canvas = document.getElementById('graficoSetores');
         if (canvas) {{
             new Chart(canvas, {{
@@ -701,24 +700,22 @@ def relatorio(request: Request, inicio: str = "", fim: str = ""):
                             data: dadosReq,
                             backgroundColor: '#E85D1F',
                             borderRadius: 6,
-                            maxBarThickness: 42
-                        }},
-                        {{
-                            label: 'Itens solicitados',
-                            data: dadosItens,
-                            backgroundColor: '#1E2128',
-                            borderRadius: 6,
-                            maxBarThickness: 42
+                            maxBarThickness: 56
                         }}
                     ]
                 }},
                 options: {{
                     responsive: true,
                     plugins: {{
-                        legend: {{ position: 'top', labels: {{ font: {{ family: 'Inter' }} }} }}
+                        legend: {{ display: false }},
+                        tooltip: {{
+                            callbacks: {{
+                                label: (ctx) => ctx.parsed.y + ' requisição(ões)'
+                            }}
+                        }}
                     }},
                     scales: {{
-                        y: {{ beginAtZero: true, ticks: {{ precision: 0 }} }}
+                        y: {{ beginAtZero: true, ticks: {{ precision: 0, stepSize: 1 }} }}
                     }}
                 }}
             }});
