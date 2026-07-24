@@ -13,7 +13,8 @@ app = FastAPI()
 app.mount("/static", StaticFiles(directory="static"), name="static")
 app.add_middleware(
     SessionMiddleware,
-    secret_key="almox_app_chave_2026"
+    secret_key="almox_app_chave_2026",
+    max_age=60 * 60 * 24 * 30  # sessão dura 30 dias
 )
 
 # =========================
@@ -97,7 +98,7 @@ def base_html(titulo, corpo, extra_head=""):
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <title>{titulo} · Almox</title>
         {FONTS}
-        <link rel="stylesheet" href="/static/style.css?v=2">
+        <link rel="stylesheet" href="/static/style.css?v=3">
         {extra_head}
     </head>
     <body>
@@ -149,7 +150,10 @@ def badge(status):
 # =========================
 
 @app.get("/", response_class=HTMLResponse)
-def login():
+def login(request: Request):
+    usuario_salvo = request.cookies.get("usuario_salvo", "")
+    checked = "checked" if usuario_salvo else ""
+
     corpo = f"""
     <div class="login-wrap">
         <div class="card login-card">
@@ -158,8 +162,12 @@ def login():
             <span class="login-subtitle">Grupo Alvorada &middot; Areal Recria</span>
 
             <form method="post" action="/login">
-                <input class="field" name="usuario" placeholder="Usuário" autocomplete="off">
+                <input class="field" name="usuario" placeholder="Usuário" autocomplete="off" value="{usuario_salvo}">
                 <input class="field" name="senha" type="password" placeholder="Senha">
+                <label class="remember-check">
+                    <input type="checkbox" name="lembrar" value="1" {checked}>
+                    Lembrar meu usuário
+                </label>
                 <button class="btn btn-primary btn-block" type="submit">Entrar</button>
             </form>
         </div>
@@ -168,14 +176,25 @@ def login():
     return base_html("Login", corpo)
 
 @app.post("/login")
-def login_post(request: Request, usuario: str = Form(...), senha: str = Form(...)):
+def login_post(request: Request, usuario: str = Form(...), senha: str = Form(...), lembrar: str = Form(None)):
     if usuario in usuarios and usuarios[usuario]["senha"] == senha:
         request.session["user"] = usuario
 
-        if usuarios[usuario]["tipo"] == "admin":
-            return RedirectResponse("/painel", status_code=303)
+        destino = "/painel" if usuarios[usuario]["tipo"] == "admin" else "/menu"
+        resposta = RedirectResponse(destino, status_code=303)
+
+        if lembrar:
+            resposta.set_cookie(
+                "usuario_salvo",
+                usuario,
+                max_age=60 * 60 * 24 * 30,
+                httponly=True,
+                samesite="lax",
+            )
         else:
-            return RedirectResponse("/menu", status_code=303)
+            resposta.delete_cookie("usuario_salvo")
+
+        return resposta
 
     return RedirectResponse("/", status_code=303)
 
