@@ -215,6 +215,25 @@ a { color: inherit; }
   box-shadow: 0 0 0 3px var(--amber-soft);
 }
 
+.remember-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--ink-soft);
+  text-align: left;
+  margin: -2px 0 16px;
+  cursor: pointer;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.remember-check input {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--amber);
+  cursor: pointer;
+}
+
 /* ---------- busca / lista de itens (requisição) ---------- */
 .search-wrap { position: relative; margin-bottom: 14px; }
 .search-wrap input { padding-left: 38px; }
