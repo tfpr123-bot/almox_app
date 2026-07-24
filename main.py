@@ -97,7 +97,7 @@ def base_html(titulo, corpo, extra_head=""):
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <title>{titulo} · Almox</title>
         {FONTS}
-        <link rel="stylesheet" href="/static/style.css">
+        <link rel="stylesheet" href="/static/style.css?v=2">
         {extra_head}
     </head>
     <body>
