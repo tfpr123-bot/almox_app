@@ -154,8 +154,8 @@ def login():
     <div class="login-wrap">
         <div class="card login-card">
             <img src="/static/logo.png.png">
-            <span class="eyebrow">Controle de almoxarifado</span>
-            <h2>Entrar no sistema</h2>
+            <h2 class="login-title">Gestão de Requisições</h2>
+            <span class="login-subtitle">Grupo Alvorada &middot; Areal Recria</span>
 
             <form method="post" action="/login">
                 <input class="field" name="usuario" placeholder="Usuário" autocomplete="off">
