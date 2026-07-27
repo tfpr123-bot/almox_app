@@ -468,7 +468,9 @@ def sidebar(ativo="dashboard"):
         return f'<a class="{cls}" href="{href}">{label}</a>'
     return f"""
     <div class="sidebar">
-        <img src="/static/logo.png.png">
+        <div class="sidebar-logo">
+            <img src="/static/logo.png.png">
+        </div>
         <span class="brand-tag">Painel admin</span>
         {item("/painel", "📊 Dashboard", "dashboard")}
         {item("/relatorio", "📈 Relatório", "relatorio")}
