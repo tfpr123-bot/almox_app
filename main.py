@@ -7,7 +7,9 @@ import unicodedata
 from datetime import datetime, date, timedelta
 import calendar
 import os
-import json
+
+from sqlalchemy import create_engine, Column, Integer, String, DateTime
+from sqlalchemy.orm import sessionmaker, declarative_base
 
 app = FastAPI()
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -16,6 +18,60 @@ app.add_middleware(
     secret_key="almox_app_chave_2026",
     max_age=60 * 60 * 24 * 30  # sessão dura 30 dias
 )
+
+# =========================
+# BANCO DE DADOS (Postgres via SQLAlchemy)
+# =========================
+# DATABASE_URL vem de uma variável de ambiente (configure no Render).
+# Se não existir (ex: rodando local sem configurar nada), cai para um
+# arquivo sqlite local só para não quebrar o desenvolvimento.
+
+DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///./almox_local.db")
+
+# Render/Supabase às vezes fornecem a URL como "postgres://", mas o
+# SQLAlchemy moderno exige "postgresql://". Corrige automaticamente.
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+
+engine = create_engine(DATABASE_URL, pool_pre_ping=True)
+SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+Base = declarative_base()
+
+
+class Requisicao(Base):
+    __tablename__ = "requisicoes"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user = Column(String, nullable=False)
+    codigo = Column(String, nullable=False)
+    descricao = Column(String, nullable=False)
+    quantidade = Column(Integer, nullable=False)
+    data = Column(String, nullable=False)  # mantém o formato "%d/%m/%Y %H:%M" já usado no HTML
+    status = Column(String, nullable=False, default="PENDENTE")
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "user": self.user,
+            "codigo": self.codigo,
+            "descricao": self.descricao,
+            "quantidade": self.quantidade,
+            "data": self.data,
+            "status": self.status,
+        }
+
+
+# Cria a tabela no banco se ainda não existir (não apaga dados existentes)
+Base.metadata.create_all(bind=engine)
+
+
+def get_db():
+    db = SessionLocal()
+    try:
+        return db
+    finally:
+        pass  # fechamos manualmente em cada rota para simplificar (app pequeno)
+
 
 # =========================
 # USUÁRIOS
@@ -33,28 +89,6 @@ usuarios = {
     "A08": {"senha": "123", "tipo": "setor"},
     "BANHEIRO CENTRAL": {"senha": "123", "tipo": "setor"},
 }
-
-requisicoes = []
-
-ARQ = "requisicoes.xlsx"
-
-# =========================
-# CARREGAR EXCEL
-# =========================
-
-if os.path.exists(ARQ):
-    try:
-        requisicoes = pd.read_excel(ARQ).to_dict("records")
-    except Exception:
-        requisicoes = []
-
-def salvar():
-    pd.DataFrame(requisicoes).to_excel(ARQ, index=False)
-
-def proximo_id():
-    if not requisicoes:
-        return 1
-    return max(r["id"] for r in requisicoes) + 1
 
 # =========================
 # UTIL
@@ -398,17 +432,21 @@ def enviar(request: Request, codigo: str = Form(...), quantidade: int = Form(...
 
     item = item.iloc[0]
 
-    requisicoes.append({
-        "id": proximo_id(),
-        "user": request.session["user"],
-        "codigo": codigo,
-        "descricao": item[desc],
-        "quantidade": quantidade,
-        "data": datetime.now().strftime("%d/%m/%Y %H:%M"),
-        "status": "PENDENTE"
-    })
+    db = get_db()
+    try:
+        nova = Requisicao(
+            user=request.session["user"],
+            codigo=codigo,
+            descricao=str(item[desc]),
+            quantidade=quantidade,
+            data=datetime.now().strftime("%d/%m/%Y %H:%M"),
+            status="PENDENTE",
+        )
+        db.add(nova)
+        db.commit()
+    finally:
+        db.close()
 
-    salvar()
     return RedirectResponse("/minhas", status_code=303)
 
 # =========================
@@ -421,23 +459,31 @@ def minhas(request: Request):
     if not request.session.get("user"):
         return RedirectResponse("/")
 
-    linhas = ""
-    tem_linha = False
-    for r in requisicoes:
-        if r["user"] == request.session["user"]:
-            tem_linha = True
-            linhas += f"""
-            <tr>
-                <td class="mono">#{r['id']}</td>
-                <td class="mono">{r['codigo']}</td>
-                <td>{r['descricao']}</td>
-                <td>{r['quantidade']}</td>
-                <td>{r['data']}</td>
-                <td>{badge(r['status'])}</td>
-            </tr>
-            """
+    db = get_db()
+    try:
+        minhas_reqs = (
+            db.query(Requisicao)
+            .filter(Requisicao.user == request.session["user"])
+            .order_by(Requisicao.id.desc())
+            .all()
+        )
+    finally:
+        db.close()
 
-    if not tem_linha:
+    linhas = ""
+    for r in minhas_reqs:
+        linhas += f"""
+        <tr>
+            <td class="mono">#{r.id}</td>
+            <td class="mono">{r.codigo}</td>
+            <td>{r.descricao}</td>
+            <td>{r.quantidade}</td>
+            <td>{r.data}</td>
+            <td>{badge(r.status)}</td>
+        </tr>
+        """
+
+    if not minhas_reqs:
         conteudo_tabela = '<div class="empty-state">Você ainda não enviou nenhuma requisição.</div>'
     else:
         conteudo_tabela = f"""
@@ -489,14 +535,20 @@ def painel(request: Request, filtro: str = "TODOS"):
     if not request.session.get("user") or usuarios.get(request.session["user"], {}).get("tipo") != "admin":
         return RedirectResponse("/")
 
-    total = len(requisicoes)
-    pend = len([r for r in requisicoes if r["status"] == "PENDENTE"])
-    ok = len([r for r in requisicoes if r["status"] == "ATENDIDO"])
-    neg = len([r for r in requisicoes if r["status"] == "RECUSADO"])
+    db = get_db()
+    try:
+        todas = db.query(Requisicao).order_by(Requisicao.id.desc()).all()
+    finally:
+        db.close()
 
-    lista = requisicoes
+    total = len(todas)
+    pend = len([r for r in todas if r.status == "PENDENTE"])
+    ok = len([r for r in todas if r.status == "ATENDIDO"])
+    neg = len([r for r in todas if r.status == "RECUSADO"])
+
+    lista = todas
     if filtro != "TODOS":
-        lista = [r for r in requisicoes if r["status"] == filtro]
+        lista = [r for r in todas if r.status == filtro]
 
     def chip(valor, label):
         ativo = "active" if filtro == valor else ""
@@ -506,19 +558,19 @@ def painel(request: Request, filtro: str = "TODOS"):
     for r in lista:
         linhas += f"""
         <tr>
-            <td class="mono">#{r['id']}</td>
-            <td>{r['user']}</td>
-            <td class="mono">{r['codigo']}</td>
-            <td>{r['descricao']}</td>
-            <td>{r['quantidade']}</td>
-            <td>{badge(r['status'])}</td>
+            <td class="mono">#{r.id}</td>
+            <td>{r.user}</td>
+            <td class="mono">{r.codigo}</td>
+            <td>{r.descricao}</td>
+            <td>{r.quantidade}</td>
+            <td>{badge(r.status)}</td>
             <td>
                 <div class="row-actions">
-                    <a class="btn btn-icon btn-approve" href="/atender/{r['id']}">✔️ Atender</a>
-                    <a class="btn btn-icon btn-reject" href="/recusar/{r['id']}">❌ Recusar</a>
+                    <a class="btn btn-icon btn-approve" href="/atender/{r.id}">✔️ Atender</a>
+                    <a class="btn btn-icon btn-reject" href="/recusar/{r.id}">❌ Recusar</a>
                 </div>
             </td>
-            <td><a class="btn btn-icon btn-print" href="/imprimir/{r['id']}">🖨️</a></td>
+            <td><a class="btn btn-icon btn-print" href="/imprimir/{r.id}">🖨️</a></td>
         </tr>
         """
 
@@ -620,24 +672,29 @@ def relatorio(request: Request, inicio: str = "", fim: str = ""):
     if inicio_d > fim_d:
         inicio_d, fim_d = fim_d, inicio_d
 
+    db = get_db()
+    try:
+        todas = db.query(Requisicao).all()
+    finally:
+        db.close()
+
     filtradas = []
-    for r in requisicoes:
-        d = parse_data_req(r.get("data"))
+    for r in todas:
+        d = parse_data_req(r.data)
         if d and inicio_d <= d <= fim_d:
             filtradas.append(r)
 
     resumo = {}
     for r in filtradas:
-        setor = r["user"]
+        setor = r.user
         if setor not in resumo:
             resumo[setor] = {"requisicoes": 0, "itens": 0}
         resumo[setor]["requisicoes"] += 1
-        resumo[setor]["itens"] += int(r.get("quantidade") or 0)
+        resumo[setor]["itens"] += int(r.quantidade or 0)
 
     setores_ordenados = sorted(resumo.items(), key=lambda x: x[1]["requisicoes"], reverse=True)
     labels = [s for s, _ in setores_ordenados]
     valores_req = [v["requisicoes"] for _, v in setores_ordenados]
-    valores_itens = [v["itens"] for _, v in setores_ordenados]
 
     linhas_tabela = ""
     for setor, v in setores_ordenados:
@@ -755,29 +812,29 @@ def imprimir(request: Request, id: int):
     if not request.session.get("user"):
         return RedirectResponse("/")
 
-    req = None
-    for r in requisicoes:
-        if r["id"] == id:
-            req = r
-            break
+    db = get_db()
+    try:
+        req = db.query(Requisicao).filter(Requisicao.id == id).first()
+    finally:
+        db.close()
 
     if not req:
         return pagina_erro("Requisição não encontrada.")
 
-    status_classe = req["status"].lower()
+    status_classe = req.status.lower()
 
     corpo = f"""
     <div class="ticket">
-        <span class="stamp {status_classe}">{req['status']}</span>
+        <span class="stamp {status_classe}">{req.status}</span>
         <span class="eyebrow">Ficha de requisição</span>
         <h2>REQUISIÇÃO DE MATERIAL</h2>
 
-        <div class="row"><span class="k">ID</span><span class="v mono">#{req['id']}</span></div>
-        <div class="row"><span class="k">Setor</span><span class="v">{req['user']}</span></div>
-        <div class="row"><span class="k">Data</span><span class="v">{req['data']}</span></div>
-        <div class="row"><span class="k">Código</span><span class="v mono">{req['codigo']}</span></div>
-        <div class="row"><span class="k">Material</span><span class="v">{req['descricao']}</span></div>
-        <div class="row"><span class="k">Quantidade</span><span class="v">{req['quantidade']}</span></div>
+        <div class="row"><span class="k">ID</span><span class="v mono">#{req.id}</span></div>
+        <div class="row"><span class="k">Setor</span><span class="v">{req.user}</span></div>
+        <div class="row"><span class="k">Data</span><span class="v">{req.data}</span></div>
+        <div class="row"><span class="k">Código</span><span class="v mono">{req.codigo}</span></div>
+        <div class="row"><span class="k">Material</span><span class="v">{req.descricao}</span></div>
+        <div class="row"><span class="k">Quantidade</span><span class="v">{req.quantidade}</span></div>
 
         <div class="sig">
             <div class="line"></div>
@@ -806,22 +863,28 @@ def imprimir(request: Request, id: int):
 def atender(request: Request, id: int):
     if not request.session.get("user") or usuarios.get(request.session["user"], {}).get("tipo") != "admin":
         return RedirectResponse("/")
-    for r in requisicoes:
-        if r["id"] == id:
-            r["status"] = "ATENDIDO"
-            salvar()
-            break
+    db = get_db()
+    try:
+        r = db.query(Requisicao).filter(Requisicao.id == id).first()
+        if r:
+            r.status = "ATENDIDO"
+            db.commit()
+    finally:
+        db.close()
     return RedirectResponse("/painel")
 
 @app.get("/recusar/{id}")
 def recusar(request: Request, id: int):
     if not request.session.get("user") or usuarios.get(request.session["user"], {}).get("tipo") != "admin":
         return RedirectResponse("/")
-    for r in requisicoes:
-        if r["id"] == id:
-            r["status"] = "RECUSADO"
-            salvar()
-            break
+    db = get_db()
+    try:
+        r = db.query(Requisicao).filter(Requisicao.id == id).first()
+        if r:
+            r.status = "RECUSADO"
+            db.commit()
+    finally:
+        db.close()
     return RedirectResponse("/painel")
 
 # =========================
