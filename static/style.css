@@ -426,6 +426,14 @@ table.tbl tr:hover td { background: var(--paper-2); }
   position: fixed;
   top: 0; left: 0; bottom: 0;
 }
+.sidebar-logo {
+  background: var(--paper);
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+  display: inline-block;
+  margin-bottom: 10px;
+}
+.sidebar-logo img { display: block; max-width: 100%; }
 .sidebar img { max-width: 100%; margin-bottom: 6px; }
 .sidebar .brand-tag {
   font-family: 'IBM Plex Mono', monospace;
