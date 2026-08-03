@@ -7,7 +7,8 @@ import unicodedata
 from datetime import datetime, date, timedelta
 import calendar
 import os
-from sqlalchemy import create_engine, Column, Integer, String, DateTime
+
+from sqlalchemy import create_engine, Column, Integer, String, DateTime, inspect, text
 from sqlalchemy.orm import sessionmaker, declarative_base
 
 app = FastAPI()
@@ -36,12 +37,17 @@ engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 Base = declarative_base()
 
+# Unidade usada como padrão para requisições antigas que não tinham
+# esse campo (gravadas antes da migração multi-unidade).
+UNIDADE_PADRAO = "AREAL RECRIA"
+
 
 class Requisicao(Base):
     __tablename__ = "requisicoes"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     user = Column(String, nullable=False)
+    unidade = Column(String, nullable=True)  # preenchido a partir da unidade do usuário que enviou
     codigo = Column(String, nullable=False)
     descricao = Column(String, nullable=False)
     quantidade = Column(Integer, nullable=False)
@@ -52,6 +58,7 @@ class Requisicao(Base):
         return {
             "id": self.id,
             "user": self.user,
+            "unidade": self.unidade,
             "codigo": self.codigo,
             "descricao": self.descricao,
             "quantidade": self.quantidade,
@@ -62,6 +69,35 @@ class Requisicao(Base):
 
 # Cria a tabela no banco se ainda não existir (não apaga dados existentes)
 Base.metadata.create_all(bind=engine)
+
+
+def migrar_coluna_unidade():
+    """
+    Garante que a tabela 'requisicoes' tenha a coluna 'unidade'.
+    Se o banco já existia antes dessa mudança (sem a coluna), ela é
+    adicionada aqui via ALTER TABLE, e as linhas antigas (que ficariam
+    com unidade NULL) são preenchidas com UNIDADE_PADRAO, para não
+    "sumirem" dos painéis depois que o filtro por unidade entrar em vigor.
+    """
+    insp = inspect(engine)
+    colunas = [c["name"] for c in insp.get_columns("requisicoes")]
+
+    if "unidade" not in colunas:
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE requisicoes ADD COLUMN unidade VARCHAR"))
+
+    # Preenche linhas antigas (unidade NULL ou vazia) com a unidade padrão.
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "UPDATE requisicoes SET unidade = :padrao "
+                "WHERE unidade IS NULL OR unidade = ''"
+            ),
+            {"padrao": UNIDADE_PADRAO},
+        )
+
+
+migrar_coluna_unidade()
 
 
 def get_db():
@@ -94,7 +130,11 @@ UNIDADES = {
 
 
 def arquivo_materiais_da_unidade(unidade):
-    return UNIDADES.get(unidade, UNIDADES["AREAL RECRIA"])["arquivo_materiais"]
+    return UNIDADES.get(unidade, UNIDADES[UNIDADE_PADRAO])["arquivo_materiais"]
+
+
+def nome_unidade(unidade):
+    return UNIDADES.get(unidade, UNIDADES[UNIDADE_PADRAO])["nome"]
 
 
 # =========================
@@ -111,12 +151,10 @@ usuarios = {
     "A07": {"senha": "123", "tipo": "setor", "unidade": "AREAL RECRIA"},
     "A08": {"senha": "123", "tipo": "setor", "unidade": "AREAL RECRIA"},
     "BANHEIRO CENTRAL": {"senha": "123", "tipo": "setor", "unidade": "AREAL RECRIA"},
-
     # --- Fábrica de Ração ---
     "admin_fabrica": {"senha": "123", "tipo": "admin", "unidade": "FABRICA RACAO"},
     "LIDER PRODUCAO": {"senha": "123", "tipo": "setor", "unidade": "FABRICA RACAO"},
     "LIDER MANUTENCAO": {"senha": "123", "tipo": "setor", "unidade": "FABRICA RACAO"},
-
     # --- Fazenda Vitória ---
     "admin_vitoria": {"senha": "123", "tipo": "admin", "unidade": "FAZENDA VITORIA"},
     "AP03": {"senha": "123", "tipo": "setor", "unidade": "FAZENDA VITORIA"},
@@ -131,6 +169,16 @@ usuarios = {
     "BC VITORIA": {"senha": "123", "tipo": "setor", "unidade": "FAZENDA VITORIA"},
 }
 
+
+def unidade_do_usuario(request: Request):
+    """Unidade do usuário logado, lendo primeiro da sessão e caindo para o dicionário 'usuarios' se preciso."""
+    unidade = request.session.get("unidade")
+    if unidade:
+        return unidade
+    dados = usuarios.get(request.session.get("user"), {})
+    return dados.get("unidade", UNIDADE_PADRAO)
+
+
 # =========================
 # UTIL
 # =========================
@@ -141,7 +189,13 @@ def normalizar(txt):
     return unicodedata.normalize("NFKD", txt).encode("ASCII", "ignore").decode("ASCII")
 
 
-def carregar_excel(arquivo="materiais.xlsx"):
+def carregar_excel(unidade=None):
+    """
+    Carrega o catálogo de materiais correto para a unidade informada.
+    Antes essa função sempre lia 'materiais.xlsx' fixo; agora ela usa
+    o arquivo configurado em UNIDADES para a unidade do usuário logado.
+    """
+    arquivo = arquivo_materiais_da_unidade(unidade) if unidade else "materiais.xlsx"
     df = pd.read_excel(arquivo)
     df.columns = [normalizar(c) for c in df.columns]
     return df
@@ -157,10 +211,6 @@ def pegar_colunas(df):
     return cods[0], descs[0]
 
 
-def unidade_do_usuario(request: Request):
-    return usuarios.get(request.session.get("user"), {}).get("unidade", "AREAL RECRIA")
-
-
 # =========================
 # TEMA / LAYOUT BASE
 # =========================
@@ -173,56 +223,51 @@ FONTS = """
 
 def base_html(titulo, corpo, extra_head=""):
     return f"""
-    <html>
-    <head>
-        <meta charset="utf-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1">
-        <title>{titulo} · Almox</title>
-        {FONTS}
-        <link rel="stylesheet" href="/static/style.css?v=3">
-        {extra_head}
-    </head>
-    <body>
-        {corpo}
-    </body>
-    </html>
-    """
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{titulo} · Almox</title>
+{FONTS}
+<link rel="stylesheet" href="/static/style.css?v=3">
+{extra_head}
+</head>
+<body>
+{corpo}
+</body>
+</html>
+"""
 
 
-def topbar(tipo="setor", unidade=None):
+def topbar(tipo="setor"):
     if tipo == "admin":
         nav = '<a class="link" href="/painel">📊 Painel</a><a class="link" href="/logout">Sair</a>'
     else:
         nav = '<a class="link" href="/menu">⬅️ Menu</a><a class="link" href="/logout">Sair</a>'
-
-    nome_unidade = UNIDADES.get(unidade, {}).get("nome", "")
-    tag_unidade = f'<span class="unit-tag">{nome_unidade}</span>' if nome_unidade else ""
-
     return f"""
-    <div class="topbar">
-        <div class="brand">
-            <img src="/static/logo.png.png">
-            <span>ALMOX</span>
-            {tag_unidade}
-        </div>
-        <nav>
-            {nav}
-        </nav>
+<div class="topbar">
+    <div class="brand">
+        <img src="/static/logo.png.png">
+        <span>ALMOX</span>
     </div>
-    """
+    <nav>
+        {nav}
+    </nav>
+</div>
+"""
 
 
 def pagina_erro(msg):
     corpo = f"""
-    <div class="error-wrap">
-        <div class="card error-card">
-            <div class="icon">⚠️</div>
-            <h2>Ops, deu um problema</h2>
-            <p>{msg}</p>
-            <a class="btn btn-dark btn-block" href="/materiais">Voltar</a>
-        </div>
+<div class="error-wrap">
+    <div class="card error-card">
+        <div class="icon">⚠️</div>
+        <h2>Ops, deu um problema</h2>
+        <p>{msg}</p>
+        <a class="btn btn-dark btn-block" href="/materiais">Voltar</a>
     </div>
-    """
+</div>
+"""
     return HTMLResponse(base_html("Erro", corpo))
 
 
@@ -239,28 +284,46 @@ def badge(status):
 # LOGIN
 # =========================
 @app.get("/", response_class=HTMLResponse)
-def login(request: Request):
+def login(request: Request, erro: str = ""):
     usuario_salvo = request.cookies.get("usuario_salvo", "")
     checked = "checked" if usuario_salvo else ""
 
+    aviso_html = ""
+    if erro == "1":
+        aviso_html = """
+<div class="login-alert">
+    ⚠️ Usuário ou senha incorretos. Tente novamente.
+</div>
+"""
+
     corpo = f"""
-    <div class="login-wrap">
-        <div class="card login-card">
-            <img src="/static/logo.png.png">
-            <h2 class="login-title">Gestão de Requisições</h2>
-            <span class="login-subtitle login-subtitle-center">Grupo Alvorada</span>
-            <form method="post" action="/login">
-                <input class="field" name="usuario" placeholder="Usuário" autocomplete="off" value="{usuario_salvo}">
-                <input class="field" name="senha" type="password" placeholder="Senha">
-                <label class="remember-check">
-                    <input type="checkbox" name="lembrar" value="1" {checked}>
-                    Lembrar meu usuário
-                </label>
-                <button class="btn btn-primary btn-block" type="submit">Entrar</button>
-            </form>
-        </div>
+<div class="login-wrap">
+    <div class="card login-card">
+        <img src="/static/logo.png.png">
+        <h2 class="login-title">Gestão de Requisições</h2>
+        <span class="login-subtitle">Grupo Alvorada</span>
+        {aviso_html}
+        <form method="post" action="/login">
+            <input class="field" name="usuario" placeholder="Usuário" autocomplete="off" value="{usuario_salvo}">
+            <div class="password-wrap">
+                <input class="field" id="senha" name="senha" type="password" placeholder="Senha">
+                <button type="button" class="toggle-senha" onclick="alternarSenha()" aria-label="Mostrar senha">👁️</button>
+            </div>
+            <label class="remember-check">
+                <input type="checkbox" name="lembrar" value="1" {checked}>
+                Lembrar meu usuário
+            </label>
+            <button class="btn btn-primary btn-block" type="submit">Entrar</button>
+        </form>
     </div>
-    """
+</div>
+<script>
+function alternarSenha() {{
+    const campo = document.getElementById('senha');
+    campo.type = campo.type === 'password' ? 'text' : 'password';
+}}
+</script>
+"""
     return base_html("Login", corpo)
 
 
@@ -268,6 +331,7 @@ def login(request: Request):
 def login_post(request: Request, usuario: str = Form(...), senha: str = Form(...), lembrar: str = Form(None)):
     if usuario in usuarios and usuarios[usuario]["senha"] == senha:
         request.session["user"] = usuario
+        request.session["unidade"] = usuarios[usuario]["unidade"]
         destino = "/painel" if usuarios[usuario]["tipo"] == "admin" else "/menu"
         resposta = RedirectResponse(destino, status_code=303)
         if lembrar:
@@ -281,7 +345,9 @@ def login_post(request: Request, usuario: str = Form(...), senha: str = Form(...
         else:
             resposta.delete_cookie("usuario_salvo")
         return resposta
-    return RedirectResponse("/", status_code=303)
+
+    # usuário ou senha incorretos: volta pro login com aviso
+    return RedirectResponse("/?erro=1", status_code=303)
 
 
 # =========================
@@ -295,42 +361,42 @@ def menu(request: Request):
         return RedirectResponse("/painel")
 
     corpo = f"""
-    <div class="menu-wrap">
-        <div class="menu-shell">
-            <img src="/static/logo.png.png">
-            <span class="eyebrow">Setor: {request.session['user']}</span>
-            <h2>O que você precisa fazer?</h2>
-            <p class="page-sub">Toque em uma das opções abaixo.</p>
+<div class="menu-wrap">
+    <div class="menu-shell">
+        <img src="/static/logo.png.png">
+        <span class="eyebrow">Setor: {request.session['user']}</span>
+        <h2>O que você precisa fazer?</h2>
+        <p class="page-sub">Toque em uma das opções abaixo.</p>
 
-            <a class="menu-btn primary" href="/requisicao">
-                <span class="icon">🧾</span>
-                <span class="text">
-                    <span class="title">Nova requisição</span>
-                    <span class="sub">Pedir um material ao almoxarifado</span>
-                </span>
-                <span class="arrow">›</span>
-            </a>
+        <a class="menu-btn primary" href="/requisicao">
+            <span class="icon">🧾</span>
+            <span class="text">
+                <span class="title">Nova requisição</span>
+                <span class="sub">Pedir um material ao almoxarifado</span>
+            </span>
+            <span class="arrow">›</span>
+        </a>
 
-            <a class="menu-btn secondary" href="/minhas">
-                <span class="icon">📄</span>
-                <span class="text">
-                    <span class="title">Status da requisição</span>
-                    <span class="sub">Ver o andamento dos seus pedidos</span>
-                </span>
-                <span class="arrow">›</span>
-            </a>
+        <a class="menu-btn secondary" href="/minhas">
+            <span class="icon">📄</span>
+            <span class="text">
+                <span class="title">Status da requisição</span>
+                <span class="sub">Ver o andamento dos seus pedidos</span>
+            </span>
+            <span class="arrow">›</span>
+        </a>
 
-            <a class="menu-btn exit" href="/logout">
-                <span class="icon">🚪</span>
-                <span class="text">
-                    <span class="title">Sair</span>
-                    <span class="sub">Voltar para a tela de login</span>
-                </span>
-                <span class="arrow">›</span>
-            </a>
-        </div>
+        <a class="menu-btn exit" href="/logout">
+            <span class="icon">🚪</span>
+            <span class="text">
+                <span class="title">Sair</span>
+                <span class="sub">Voltar para a tela de login</span>
+            </span>
+            <span class="arrow">›</span>
+        </a>
     </div>
-    """
+</div>
+"""
     return base_html("Menu", corpo)
 
 
@@ -343,28 +409,31 @@ def materiais(request: Request):
         return RedirectResponse("/")
 
     unidade = unidade_do_usuario(request)
-    arquivo = arquivo_materiais_da_unidade(unidade)
 
     try:
-        df = carregar_excel(arquivo)
+        df = carregar_excel(unidade)
     except FileNotFoundError:
-        return pagina_erro(f"Arquivo {arquivo} não encontrado. Coloque a planilha na pasta do sistema.")
+        return pagina_erro(
+            f"Arquivo {arquivo_materiais_da_unidade(unidade)} não encontrado. "
+            "Coloque a planilha na pasta do sistema."
+        )
     except ValueError as e:
         return pagina_erro(str(e))
 
     tabela = df.to_html(index=False, classes="tbl", border=0)
 
     corpo = f"""
-    {topbar(usuarios.get(request.session["user"], {}).get("tipo", "setor"), unidade)}
-    <div class="page">
-        <span class="eyebrow">Catálogo</span>
-        <h2>📦 Materiais</h2>
-        <p class="page-sub">Consulta geral de itens disponíveis no almoxarifado.</p>
-        <div class="table-wrap">
-            {tabela}
-        </div>
+{topbar(usuarios.get(request.session["user"], {}).get("tipo", "setor"))}
+<div class="page">
+    <span class="eyebrow">Catálogo · {nome_unidade(unidade)}</span>
+    <h2>📦 Materiais</h2>
+    <p class="page-sub">Consulta geral de itens disponíveis no almoxarifado.</p>
+
+    <div class="table-wrap">
+        {tabela}
     </div>
-    """
+</div>
+"""
     return base_html("Materiais", corpo)
 
 
@@ -377,84 +446,83 @@ def req(request: Request):
         return RedirectResponse("/")
 
     unidade = unidade_do_usuario(request)
-    arquivo = arquivo_materiais_da_unidade(unidade)
 
     try:
-        df = carregar_excel(arquivo)
+        df = carregar_excel(unidade)
         cod, desc = pegar_colunas(df)
     except FileNotFoundError:
-        return pagina_erro(f"Arquivo {arquivo} não encontrado.")
+        return pagina_erro(f"Arquivo {arquivo_materiais_da_unidade(unidade)} não encontrado.")
     except ValueError as e:
         return pagina_erro(str(e))
 
-    unidades_medida = [c for c in df.columns if "UNID" in c]
-    col_un = unidades_medida[0] if unidades_medida else None
+    unidades_cols = [c for c in df.columns if "UNID" in c]
+    col_un = unidades_cols[0] if unidades_cols else None
 
     itens_html = ""
     for _, r in df.iterrows():
         un = f" ({r[col_un]})" if col_un else ""
         itens_html += f"""
-        <div class="item" data-codigo="{r[cod]}" data-desc="{r[desc]}{un}"
-             onclick="selecionar(this)">
-            <span class="code">{r[cod]}</span>{r[desc]}{un}
-        </div>
-        """
+<div class="item" data-codigo="{r[cod]}" data-desc="{r[desc]}{un}"
+     onclick="selecionar(this)">
+    <span class="code">{r[cod]}</span>{r[desc]}{un}
+</div>
+"""
 
     corpo = f"""
-    {topbar("setor", unidade)}
-    <div class="page page-narrow">
-        <span class="eyebrow">Setor: {request.session['user']}</span>
-        <h2>🧾 Nova requisição</h2>
-        <p class="page-sub">Busque o material, selecione na lista e informe a quantidade.</p>
+{topbar("setor")}
+<div class="page page-narrow">
+    <span class="eyebrow">Setor: {request.session['user']}</span>
+    <h2>🧾 Nova requisição</h2>
+    <p class="page-sub">Busque o material, selecione na lista e informe a quantidade.</p>
 
-        <div class="search-wrap">
-            <input class="field" id="busca" type="text" placeholder="Buscar material por nome ou código..."
-                   oninput="filtrar()" autocomplete="off">
-        </div>
-
-        <div id="lista" class="item-list">
-            {itens_html}
-        </div>
-
-        <form method="post" action="/enviar" onsubmit="return validar()" style="margin-top:16px;">
-            <div id="selecionado" class="selected-box empty">Nenhum item selecionado</div>
-            <input type="hidden" name="codigo" id="codigo">
-            <input class="field" type="number" name="quantidade" min="1" placeholder="Quantidade" required>
-            <button class="btn btn-primary btn-block" type="submit">Enviar requisição</button>
-        </form>
+    <div class="search-wrap">
+        <input class="field" id="busca" type="text" placeholder="Buscar material por nome ou código..."
+               oninput="filtrar()" autocomplete="off">
     </div>
 
-    <script>
-    function filtrar() {{
-        const termo = document.getElementById('busca').value.toUpperCase();
-        const itens = document.querySelectorAll('.item');
-        itens.forEach(function(item) {{
-            const desc = item.getAttribute('data-desc').toUpperCase();
-            const cod = item.getAttribute('data-codigo').toUpperCase();
-            item.style.display = (desc.includes(termo) || cod.includes(termo)) ? '' : 'none';
-        }});
-    }}
+    <div id="lista" class="item-list">
+        {itens_html}
+    </div>
 
-    function selecionar(el) {{
-        document.querySelectorAll('.item').forEach(function(i) {{
-            i.classList.remove('is-selected');
-        }});
-        el.classList.add('is-selected');
-        document.getElementById('codigo').value = el.getAttribute('data-codigo');
-        const box = document.getElementById('selecionado');
-        box.classList.remove('empty');
-        box.innerText = '✅ ' + el.getAttribute('data-desc');
-    }}
+    <form method="post" action="/enviar" onsubmit="return validar()" style="margin-top:16px;">
+        <div id="selecionado" class="selected-box empty">Nenhum item selecionado</div>
+        <input type="hidden" name="codigo" id="codigo">
+        <input class="field" type="number" name="quantidade" min="1" placeholder="Quantidade" required>
+        <button class="btn btn-primary btn-block" type="submit">Enviar requisição</button>
+    </form>
+</div>
 
-    function validar() {{
-        if (!document.getElementById('codigo').value) {{
-            alert('Selecione um material na lista antes de enviar.');
-            return false;
-        }}
-        return true;
+<script>
+function filtrar() {{
+    const termo = document.getElementById('busca').value.toUpperCase();
+    const itens = document.querySelectorAll('.item');
+    itens.forEach(function(item) {{
+        const desc = item.getAttribute('data-desc').toUpperCase();
+        const cod = item.getAttribute('data-codigo').toUpperCase();
+        item.style.display = (desc.includes(termo) || cod.includes(termo)) ? '' : 'none';
+    }});
+}}
+
+function selecionar(el) {{
+    document.querySelectorAll('.item').forEach(function(i) {{
+        i.classList.remove('is-selected');
+    }});
+    el.classList.add('is-selected');
+    document.getElementById('codigo').value = el.getAttribute('data-codigo');
+    const box = document.getElementById('selecionado');
+    box.classList.remove('empty');
+    box.innerText = '✅ ' + el.getAttribute('data-desc');
+}}
+
+function validar() {{
+    if (!document.getElementById('codigo').value) {{
+        alert('Selecione um material na lista antes de enviar.');
+        return false;
     }}
-    </script>
-    """
+    return true;
+}}
+</script>
+"""
     return base_html("Nova requisição", corpo)
 
 
@@ -470,27 +538,29 @@ def enviar(request: Request, codigo: str = Form(...), quantidade: int = Form(...
         return pagina_erro("Quantidade precisa ser maior que zero.")
 
     unidade = unidade_do_usuario(request)
-    arquivo = arquivo_materiais_da_unidade(unidade)
 
     try:
-        df = carregar_excel(arquivo)
+        df = carregar_excel(unidade)
         cod, desc = pegar_colunas(df)
     except FileNotFoundError:
-        return pagina_erro(f"Arquivo {arquivo} não encontrado.")
+        return pagina_erro(f"Arquivo {arquivo_materiais_da_unidade(unidade)} não encontrado.")
     except ValueError as e:
         return pagina_erro(str(e))
 
     df[cod] = df[cod].astype(str).str.strip().str.upper()
     codigo = codigo.strip().upper()
     item = df[df[cod] == codigo]
+
     if item.empty:
         return pagina_erro("Material não encontrado.")
+
     item = item.iloc[0]
 
     db = get_db()
     try:
         nova = Requisicao(
             user=request.session["user"],
+            unidade=unidade,
             codigo=codigo,
             descricao=str(item[desc]),
             quantidade=quantidade,
@@ -513,8 +583,6 @@ def minhas(request: Request):
     if not request.session.get("user"):
         return RedirectResponse("/")
 
-    unidade = unidade_do_usuario(request)
-
     db = get_db()
     try:
         minhas_reqs = (
@@ -529,39 +597,40 @@ def minhas(request: Request):
     linhas = ""
     for r in minhas_reqs:
         linhas += f"""
-        <tr>
-            <td class="mono">#{r.id}</td>
-            <td class="mono">{r.codigo}</td>
-            <td>{r.descricao}</td>
-            <td>{r.quantidade}</td>
-            <td>{r.data}</td>
-            <td>{badge(r.status)}</td>
-        </tr>
-        """
+<tr>
+    <td class="mono">#{r.id}</td>
+    <td class="mono">{r.codigo}</td>
+    <td>{r.descricao}</td>
+    <td>{r.quantidade}</td>
+    <td>{r.data}</td>
+    <td>{badge(r.status)}</td>
+</tr>
+"""
 
     if not minhas_reqs:
         conteudo_tabela = '<div class="empty-state">Você ainda não enviou nenhuma requisição.</div>'
     else:
         conteudo_tabela = f"""
-        <table class="tbl">
-            <tr>
-                <th>ID</th><th>Código</th><th>Descrição</th><th>Qtd</th><th>Data</th><th>Status</th>
-            </tr>
-            {linhas}
-        </table>
-        """
+<table class="tbl">
+    <tr>
+        <th>ID</th><th>Código</th><th>Descrição</th><th>Qtd</th><th>Data</th><th>Status</th>
+    </tr>
+    {linhas}
+</table>
+"""
 
     corpo = f"""
-    {topbar("setor", unidade)}
-    <div class="page">
-        <span class="eyebrow">Setor: {request.session['user']}</span>
-        <h2>📄 Minhas requisições</h2>
-        <p class="page-sub">Acompanhe o status de tudo o que você já solicitou.</p>
-        <div class="table-wrap">
-            {conteudo_tabela}
-        </div>
+{topbar("setor")}
+<div class="page">
+    <span class="eyebrow">Setor: {request.session['user']}</span>
+    <h2>📄 Minhas requisições</h2>
+    <p class="page-sub">Acompanhe o status de tudo o que você já solicitou.</p>
+
+    <div class="table-wrap">
+        {conteudo_tabela}
     </div>
-    """
+</div>
+"""
     return base_html("Minhas requisições", corpo)
 
 
@@ -570,94 +639,20 @@ def sidebar(ativo="dashboard", unidade=None):
         cls = "nav-link active" if ativo == chave else "nav-link"
         return f'<a class="{cls}" href="{href}">{label}</a>'
 
-    nome_unidade = UNIDADES.get(unidade, {}).get("nome", "")
-    tag_unidade = f'<span class="unit-tag">{nome_unidade}</span>' if nome_unidade else ""
+    tag_unidade = f'<span class="brand-tag">{nome_unidade(unidade)}</span>' if unidade else '<span class="brand-tag">Painel admin</span>'
 
     return f"""
-    <div class="sidebar">
-        <div class="sidebar-logo">
-            <img src="/static/logo.png.png">
-        </div>
-        <span class="brand-tag">Painel admin</span>
-        {tag_unidade}
-        {item("/painel", "📊 Dashboard", "dashboard")}
-        {item("/relatorio", "📈 Relatório", "relatorio")}
-        {item("/materiais", "📦 Materiais", "materiais")}
-        {item("/materiais/cadastrar", "➕ Cadastrar material", "cadastrar")}
-        <a class="nav-link logout" href="/logout">🚪 Sair</a>
+<div class="sidebar">
+    <div class="sidebar-logo">
+        <img src="/static/logo.png.png">
     </div>
-    """
-
-
-# =========================
-# CADASTRO DE MATERIAL
-# =========================
-@app.get("/materiais/cadastrar", response_class=HTMLResponse)
-def cadastrar_material_form(request: Request):
-    if not request.session.get("user") or usuarios.get(request.session["user"], {}).get("tipo") != "admin":
-        return RedirectResponse("/")
-
-    unidade = unidade_do_usuario(request)
-
-    corpo = f"""
-    <div class="admin-shell">
-        {sidebar("cadastrar", unidade)}
-        <div class="admin-content">
-            <span class="eyebrow">Catálogo · {UNIDADES.get(unidade, {}).get("nome", "")}</span>
-            <h2>➕ Cadastrar material</h2>
-            <p class="page-sub">Adicione um novo item ao catálogo desta unidade.</p>
-
-            <div class="card" style="padding:20px; max-width:420px;">
-                <form method="post" action="/materiais/cadastrar">
-                    <input class="field" name="codigo" placeholder="Código" required>
-                    <input class="field" name="descricao" placeholder="Descrição do material" required>
-                    <input class="field" name="unidade_medida" placeholder="Unidade (ex: UN, KG, CX)" required>
-                    <button class="btn btn-primary btn-block" type="submit">Cadastrar material</button>
-                </form>
-            </div>
-        </div>
-    </div>
-    """
-    return base_html("Cadastrar material", corpo)
-
-
-@app.post("/materiais/cadastrar")
-def cadastrar_material_post(
-    request: Request,
-    codigo: str = Form(...),
-    descricao: str = Form(...),
-    unidade_medida: str = Form(...),
-):
-    if not request.session.get("user") or usuarios.get(request.session["user"], {}).get("tipo") != "admin":
-        return RedirectResponse("/")
-
-    unidade = unidade_do_usuario(request)
-    arquivo = arquivo_materiais_da_unidade(unidade)
-
-    try:
-        df = pd.read_excel(arquivo)
-        df.columns = [normalizar(c) for c in df.columns]
-    except FileNotFoundError:
-        df = pd.DataFrame(columns=["CODIGO", "DESCRICAO", "UNIDADE"])
-
-    cod_col = next((c for c in df.columns if "COD" in c), "CODIGO")
-    desc_col = next((c for c in df.columns if "DESC" in c), "DESCRICAO")
-    unid_col = next((c for c in df.columns if "UNID" in c), "UNIDADE")
-
-    codigo_norm = codigo.strip().upper()
-
-    if not df.empty and (df[cod_col].astype(str).str.strip().str.upper() == codigo_norm).any():
-        return pagina_erro(f"Já existe um material cadastrado com o código {codigo_norm}.")
-
-    novo = {
-        cod_col: codigo_norm,
-        desc_col: descricao.strip().upper(),
-        unid_col: unidade_medida.strip().upper(),
-    }
-    df = pd.concat([df, pd.DataFrame([novo])], ignore_index=True)
-    df.to_excel(arquivo, index=False)
-
-    return RedirectResponse("/materiais", status_code=303)
+    {tag_unidade}
+    {item("/painel", "📊 Dashboard", "dashboard")}
+    {item("/relatorio", "📈 Relatório", "relatorio")}
+    {item("/materiais", "📦 Materiais", "materiais")}
+    <a class="nav-link logout" href="/logout">🚪 Sair</a>
+</div>
+"""
 
 
 # =========================
@@ -672,7 +667,13 @@ def painel(request: Request, filtro: str = "TODOS"):
 
     db = get_db()
     try:
-        todas = db.query(Requisicao).order_by(Requisicao.id.desc()).all()
+        # cada admin só vê as requisições da própria unidade
+        todas = (
+            db.query(Requisicao)
+            .filter(Requisicao.unidade == unidade)
+            .order_by(Requisicao.id.desc())
+            .all()
+        )
     finally:
         db.close()
 
@@ -692,75 +693,75 @@ def painel(request: Request, filtro: str = "TODOS"):
     linhas = ""
     for r in lista:
         linhas += f"""
-        <tr>
-            <td class="mono">#{r.id}</td>
-            <td>{r.user}</td>
-            <td class="mono">{r.codigo}</td>
-            <td>{r.descricao}</td>
-            <td>{r.quantidade}</td>
-            <td>{badge(r.status)}</td>
-            <td>
-                <div class="row-actions">
-                    <a class="btn btn-icon btn-approve" href="/atender/{r.id}">✔️ Atender</a>
-                    <a class="btn btn-icon btn-reject" href="/recusar/{r.id}">❌ Recusar</a>
-                </div>
-            </td>
-            <td><a class="btn btn-icon btn-print" href="/imprimir/{r.id}">🖨️</a></td>
-        </tr>
-        """
+<tr>
+    <td class="mono">#{r.id}</td>
+    <td>{r.user}</td>
+    <td class="mono">{r.codigo}</td>
+    <td>{r.descricao}</td>
+    <td>{r.quantidade}</td>
+    <td>{badge(r.status)}</td>
+    <td>
+        <div class="row-actions">
+            <a class="btn btn-icon btn-approve" href="/atender/{r.id}">✔️ Atender</a>
+            <a class="btn btn-icon btn-reject" href="/recusar/{r.id}">❌ Recusar</a>
+        </div>
+    </td>
+    <td><a class="btn btn-icon btn-print" href="/imprimir/{r.id}">🖨️</a></td>
+</tr>
+"""
 
     if not lista:
         tabela_html = '<div class="empty-state">Nenhuma requisição encontrada para este filtro.</div>'
     else:
         tabela_html = f"""
-        <table class="tbl">
-            <tr>
-                <th>ID</th><th>Setor</th><th>Código</th><th>Descrição</th><th>Qtd</th><th>Status</th><th>Ações</th><th></th>
-            </tr>
-            {linhas}
-        </table>
-        """
+<table class="tbl">
+    <tr>
+        <th>ID</th><th>Setor</th><th>Código</th><th>Descrição</th><th>Qtd</th><th>Status</th><th>Ações</th><th></th>
+    </tr>
+    {linhas}
+</table>
+"""
 
     corpo = f"""
-    <div class="admin-shell">
-        {sidebar("dashboard", unidade)}
-        <div class="admin-content">
-            <span class="eyebrow">Visão geral</span>
-            <h2>📊 Dashboard de requisições</h2>
-            <p class="page-sub">Acompanhe, atenda e recuse os pedidos dos setores.</p>
+<div class="admin-shell">
+    {sidebar("dashboard", unidade)}
+    <div class="admin-content">
+        <span class="eyebrow">Visão geral · {nome_unidade(unidade)}</span>
+        <h2>📊 Dashboard de requisições</h2>
+        <p class="page-sub">Acompanhe, atenda e recuse os pedidos dos setores da sua unidade.</p>
 
-            <div class="stat-row">
-                <div class="stat-card">
-                    <span class="label">Total</span>
-                    <span class="num">{total}</span>
-                </div>
-                <div class="stat-card accent-pendente">
-                    <span class="label">Pendentes</span>
-                    <span class="num">{pend}</span>
-                </div>
-                <div class="stat-card accent-atendido">
-                    <span class="label">Atendidos</span>
-                    <span class="num">{ok}</span>
-                </div>
-                <div class="stat-card accent-recusado">
-                    <span class="label">Recusados</span>
-                    <span class="num">{neg}</span>
-                </div>
+        <div class="stat-row">
+            <div class="stat-card">
+                <span class="label">Total</span>
+                <span class="num">{total}</span>
             </div>
-
-            <div class="filter-row">
-                {chip("TODOS", "Todos")}
-                {chip("PENDENTE", "Pendentes")}
-                {chip("ATENDIDO", "Atendidos")}
-                {chip("RECUSADO", "Recusados")}
+            <div class="stat-card accent-pendente">
+                <span class="label">Pendentes</span>
+                <span class="num">{pend}</span>
             </div>
-
-            <div class="table-wrap">
-                {tabela_html}
+            <div class="stat-card accent-atendido">
+                <span class="label">Atendidos</span>
+                <span class="num">{ok}</span>
+            </div>
+            <div class="stat-card accent-recusado">
+                <span class="label">Recusados</span>
+                <span class="num">{neg}</span>
             </div>
         </div>
+
+        <div class="filter-row">
+            {chip("TODOS", "Todos")}
+            {chip("PENDENTE", "Pendentes")}
+            {chip("ATENDIDO", "Atendidos")}
+            {chip("RECUSADO", "Recusados")}
+        </div>
+
+        <div class="table-wrap">
+            {tabela_html}
+        </div>
     </div>
-    """
+</div>
+"""
     return base_html("Painel admin", corpo)
 
 
@@ -809,7 +810,8 @@ def relatorio(request: Request, inicio: str = "", fim: str = ""):
 
     db = get_db()
     try:
-        todas = db.query(Requisicao).all()
+        # cada admin só vê o relatório da própria unidade
+        todas = db.query(Requisicao).filter(Requisicao.unidade == unidade).all()
     finally:
         db.close()
 
@@ -834,23 +836,23 @@ def relatorio(request: Request, inicio: str = "", fim: str = ""):
     linhas_tabela = ""
     for setor, v in setores_ordenados:
         linhas_tabela += f"""
-        <tr>
-            <td>{setor}</td>
-            <td class="mono">{v['requisicoes']}</td>
-            <td class="mono">{v['itens']}</td>
-        </tr>
-        """
+<tr>
+    <td>{setor}</td>
+    <td class="mono">{v['requisicoes']}</td>
+    <td class="mono">{v['itens']}</td>
+</tr>
+"""
 
     if not setores_ordenados:
         tabela_html = '<div class="empty-state">Nenhuma requisição encontrada nesse período.</div>'
         grafico_html = '<div class="empty-state">Sem dados para exibir no gráfico.</div>'
     else:
         tabela_html = f"""
-        <table class="tbl">
-            <tr><th>Setor</th><th>Requisições</th><th>Itens solicitados</th></tr>
-            {linhas_tabela}
-        </table>
-        """
+<table class="tbl">
+    <tr><th>Setor</th><th>Requisições</th><th>Itens solicitados</th></tr>
+    {linhas_tabela}
+</table>
+"""
         grafico_html = '<canvas id="graficoSetores" height="110"></canvas>'
 
     def periodo(dias_ini, dias_fim, chave):
@@ -860,81 +862,81 @@ def relatorio(request: Request, inicio: str = "", fim: str = ""):
     mes_passado_ref = (primeiro_dia_mes(hoje) - timedelta(days=1))
 
     corpo = f"""
-    <div class="admin-shell">
-        {sidebar("relatorio", unidade)}
-        <div class="admin-content">
-            <span class="eyebrow">Comparativo por período</span>
-            <h2>📈 Relatório de requisições</h2>
-            <p class="page-sub">Compare a quantidade de requisições feitas por cada setor no período selecionado.</p>
+<div class="admin-shell">
+    {sidebar("relatorio", unidade)}
+    <div class="admin-content">
+        <span class="eyebrow">Comparativo por período · {nome_unidade(unidade)}</span>
+        <h2>📈 Relatório de requisições</h2>
+        <p class="page-sub">Compare a quantidade de requisições feitas por cada setor da sua unidade no período selecionado.</p>
 
-            <form method="get" action="/relatorio" class="card" style="padding:16px 18px; margin-bottom:16px; display:flex; gap:12px; align-items:flex-end; flex-wrap:wrap;">
-                <div>
-                    <span class="label" style="font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--ink-soft); display:block; margin-bottom:4px;">De</span>
-                    <input class="field" style="margin-bottom:0;" type="date" name="inicio" value="{inicio_d.isoformat()}">
-                </div>
-                <div>
-                    <span class="label" style="font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--ink-soft); display:block; margin-bottom:4px;">Até</span>
-                    <input class="field" style="margin-bottom:0;" type="date" name="fim" value="{fim_d.isoformat()}">
-                </div>
-                <button class="btn btn-dark" type="submit">Aplicar</button>
-            </form>
-
-            <div class="filter-row">
-                {periodo(primeiro_dia_mes(hoje), hoje, "Este mês")}
-                {periodo(primeiro_dia_mes(mes_passado_ref), ultimo_dia_mes(mes_passado_ref), "Mês passado")}
-                {periodo(date(hoje.year, 1, 1), hoje, "Este ano")}
-                {periodo(date(2000, 1, 1), hoje, "Todos")}
+        <form method="get" action="/relatorio" class="card" style="padding:16px 18px; margin-bottom:16px; display:flex; gap:12px; align-items:flex-end; flex-wrap:wrap;">
+            <div>
+                <span class="label" style="font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--ink-soft); display:block; margin-bottom:4px;">De</span>
+                <input class="field" style="margin-bottom:0;" type="date" name="inicio" value="{inicio_d.isoformat()}">
             </div>
-
-            <div class="card" style="padding:20px; margin-bottom:20px;">
-                {grafico_html}
+            <div>
+                <span class="label" style="font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--ink-soft); display:block; margin-bottom:4px;">Até</span>
+                <input class="field" style="margin-bottom:0;" type="date" name="fim" value="{fim_d.isoformat()}">
             </div>
+            <button class="btn btn-dark" type="submit">Aplicar</button>
+        </form>
 
-            <div class="table-wrap">
-                {tabela_html}
-            </div>
+        <div class="filter-row">
+            {periodo(primeiro_dia_mes(hoje), hoje, "Este mês")}
+            {periodo(primeiro_dia_mes(mes_passado_ref), ultimo_dia_mes(mes_passado_ref), "Mês passado")}
+            {periodo(date(hoje.year, 1, 1), hoje, "Este ano")}
+            {periodo(date(2000, 1, 1), hoje, "Todos")}
+        </div>
+
+        <div class="card" style="padding:20px; margin-bottom:20px;">
+            {grafico_html}
+        </div>
+
+        <div class="table-wrap">
+            {tabela_html}
         </div>
     </div>
+</div>
 
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
-    <script>
-    const labels = {labels!r};
-    const dadosReq = {valores_req!r};
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<script>
+const labels = {labels!r};
+const dadosReq = {valores_req!r};
 
-    const canvas = document.getElementById('graficoSetores');
-    if (canvas) {{
-        new Chart(canvas, {{
-            type: 'bar',
-            data: {{
-                labels: labels,
-                datasets: [
-                    {{
-                        label: 'Requisições',
-                        data: dadosReq,
-                        backgroundColor: '#E85D1F',
-                        borderRadius: 6,
-                        maxBarThickness: 56
-                    }}
-                ]
-            }},
-            options: {{
-                responsive: true,
-                plugins: {{
-                    legend: {{ display: false }},
-                    tooltip: {{
-                        callbacks: {{
-                            label: (ctx) => ctx.parsed.y + ' requisição(ões)'
-                        }}
-                    }}
-                }},
-                scales: {{
-                    y: {{ beginAtZero: true, ticks: {{ precision: 0, stepSize: 1 }} }}
+const canvas = document.getElementById('graficoSetores');
+if (canvas) {{
+    new Chart(canvas, {{
+        type: 'bar',
+        data: {{
+            labels: labels,
+            datasets: [
+                {{
+                    label: 'Requisições',
+                    data: dadosReq,
+                    backgroundColor: '#E85D1F',
+                    borderRadius: 6,
+                    maxBarThickness: 56
                 }}
+            ]
+        }},
+        options: {{
+            responsive: true,
+            plugins: {{
+                legend: {{ display: false }},
+                tooltip: {{
+                    callbacks: {{
+                        label: (ctx) => ctx.parsed.y + ' requisição(ões)'
+                    }}
+                }}
+            }},
+            scales: {{
+                y: {{ beginAtZero: true, ticks: {{ precision: 0, stepSize: 1 }} }}
             }}
-        }});
-    }}
-    </script>
-    """
+        }}
+    }});
+}}
+</script>
+"""
     return base_html("Relatório", corpo)
 
 
@@ -958,35 +960,34 @@ def imprimir(request: Request, id: int):
     status_classe = req.status.lower()
 
     corpo = f"""
-    <div class="ticket">
-        <span class="stamp {status_classe}">{req.status}</span>
-        <span class="eyebrow">Ficha de requisição</span>
-        <h2>REQUISIÇÃO DE MATERIAL</h2>
+<div class="ticket">
+    <span class="stamp {status_classe}">{req.status}</span>
+    <span class="eyebrow">Ficha de requisição</span>
+    <h2>REQUISIÇÃO DE MATERIAL</h2>
 
-        <div class="row"><span class="k">ID</span><span class="v mono">#{req.id}</span></div>
-        <div class="row"><span class="k">Setor</span><span class="v">{req.user}</span></div>
-        <div class="row"><span class="k">Data</span><span class="v">{req.data}</span></div>
-        <div class="row"><span class="k">Código</span><span class="v mono">{req.codigo}</span></div>
-        <div class="row"><span class="k">Material</span><span class="v">{req.descricao}</span></div>
-        <div class="row"><span class="k">Quantidade</span><span class="v">{req.quantidade}</span></div>
+    <div class="row"><span class="k">ID</span><span class="v mono">#{req.id}</span></div>
+    <div class="row"><span class="k">Setor</span><span class="v">{req.user}</span></div>
+    <div class="row"><span class="k">Data</span><span class="v">{req.data}</span></div>
+    <div class="row"><span class="k">Código</span><span class="v mono">{req.codigo}</span></div>
+    <div class="row"><span class="k">Material</span><span class="v">{req.descricao}</span></div>
+    <div class="row"><span class="k">Quantidade</span><span class="v">{req.quantidade}</span></div>
 
-        <div class="sig">
-            <div class="line"></div>
-            Almoxarifado
-        </div>
+    <div class="sig">
+        <div class="line"></div>
+        Almoxarifado
     </div>
-    """
-
+</div>
+"""
     extra = """
-    <script>
-    window.onload = function(){
-        window.print();
-        window.onafterprint = function(){
-            window.location.href = "/painel";
-        }
+<script>
+window.onload = function(){
+    window.print();
+    window.onafterprint = function(){
+        window.location.href = "/painel";
     }
-    </script>
-    """
+}
+</script>
+"""
     return base_html("Imprimir requisição", corpo, extra_head=extra)
 
 
