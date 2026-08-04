@@ -258,6 +258,28 @@ def adicionar_material(arquivo, codigo, descricao, unidade_medida):
     return True, f"Material {codigo} cadastrado com sucesso."
 
 
+def remover_material(arquivo, codigo):
+    """
+    Remove do catálogo (xlsx) a linha cujo código bate com o informado.
+    Retorna (ok, mensagem).
+    """
+    df, mapa = mapear_colunas_originais(arquivo)
+
+    if "codigo" not in mapa:
+        return False, "A planilha precisa ter uma coluna de código para excluir materiais."
+
+    col_codigo = mapa["codigo"]
+    codigo = str(codigo).strip().upper()
+    mascara = df[col_codigo].astype(str).str.strip().str.upper() == codigo
+
+    if not mascara.any():
+        return False, f"Material {codigo} não encontrado."
+
+    df = df[~mascara]
+    df.to_excel(arquivo, index=False)
+    return True, f"Material {codigo} excluído."
+
+
 # =========================
 # TEMA / LAYOUT BASE
 # =========================
@@ -499,14 +521,16 @@ def menu(request: Request):
 # MATERIAIS
 # =========================
 @app.get("/materiais", response_class=HTMLResponse)
-def materiais(request: Request):
+def materiais(request: Request, ok: str = "", erro: str = ""):
     if not request.session.get("user"):
         return RedirectResponse("/")
 
     unidade = unidade_do_usuario(request)
+    tipo = usuarios.get(request.session["user"], {}).get("tipo", "setor")
 
     try:
         df = carregar_excel(unidade)
+        cod_col, desc_col = pegar_colunas(df)
     except FileNotFoundError:
         return pagina_erro(
             f"Arquivo {arquivo_materiais_da_unidade(unidade)} não encontrado. "
@@ -515,14 +539,58 @@ def materiais(request: Request):
     except ValueError as e:
         return pagina_erro(str(e))
 
-    tabela = df.to_html(index=False, classes="tbl", border=0)
+    aviso_html = ""
+    if ok:
+        aviso_html = f'<div class="form-alert form-alert-ok">✅ {ok}</div>'
+    elif erro:
+        aviso_html = f'<div class="form-alert form-alert-erro">⚠️ {erro}</div>'
+
+    cabecalho = "".join(f"<th>{c}</th>" for c in df.columns)
+    if tipo == "admin":
+        cabecalho += "<th></th>"
+
+    linhas = ""
+    for _, r in df.iterrows():
+        celulas = "".join(f"<td>{r[c]}</td>" for c in df.columns)
+        if tipo == "admin":
+            codigo_val = str(r[cod_col]).strip()
+            celulas += f"""
+<td>
+    <form method="post" action="/materiais/excluir" onsubmit="return confirm('Excluir o material {codigo_val}?');" style="margin:0;">
+        <input type="hidden" name="codigo" value="{codigo_val}">
+        <button class="btn btn-icon btn-reject" type="submit">🗑️ Excluir</button>
+    </form>
+</td>
+"""
+        linhas += f"<tr>{celulas}</tr>"
+
+    tabela = f'<table class="tbl"><tr>{cabecalho}</tr>{linhas}</table>'
 
     corpo = f"""
-{topbar(usuarios.get(request.session["user"], {}).get("tipo", "setor"))}
+<style>
+.form-alert {{
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-size: 14px;
+    margin-bottom: 16px;
+}}
+.form-alert-ok {{
+    background: #e8f5e9;
+    color: #1b6e2b;
+    border: 1px solid #bfe3c4;
+}}
+.form-alert-erro {{
+    background: #fdecea;
+    color: #b3261e;
+    border: 1px solid #f5c2c0;
+}}
+</style>
+{topbar(tipo)}
 <div class="page">
     <span class="eyebrow">Catálogo · {nome_unidade(unidade)}</span>
     <h2>📦 Materiais</h2>
     <p class="page-sub">Consulta geral de itens disponíveis no almoxarifado.</p>
+    {aviso_html}
 
     <div class="table-wrap">
         {tabela}
@@ -530,6 +598,25 @@ def materiais(request: Request):
 </div>
 """
     return base_html("Materiais", corpo)
+
+
+@app.post("/materiais/excluir")
+def excluir_material(request: Request, codigo: str = Form(...)):
+    if not request.session.get("user") or usuarios.get(request.session["user"], {}).get("tipo") != "admin":
+        return RedirectResponse("/")
+
+    unidade = unidade_do_usuario(request)
+    arquivo = arquivo_materiais_da_unidade(unidade)
+
+    from urllib.parse import quote
+    try:
+        ok, msg = remover_material(arquivo, codigo)
+    except FileNotFoundError:
+        return RedirectResponse(f"/materiais?erro=Arquivo+{arquivo}+não+encontrado.", status_code=303)
+
+    if ok:
+        return RedirectResponse(f"/materiais?ok={quote(msg)}", status_code=303)
+    return RedirectResponse(f"/materiais?erro={quote(msg)}", status_code=303)
 
 
 # =========================
