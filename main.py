@@ -211,6 +211,53 @@ def pegar_colunas(df):
     return cods[0], descs[0]
 
 
+def mapear_colunas_originais(arquivo):
+    """
+    Lê a planilha SEM normalizar os nomes de coluna (para não estragar o
+    cabeçalho original ao salvar de novo) e devolve o DataFrame junto com
+    um mapa {"codigo": <nome real da coluna>, "descricao": ..., "unidade": ...}.
+    """
+    df = pd.read_excel(arquivo)
+    mapa = {}
+    for c in df.columns:
+        n = normalizar(c)
+        if "COD" in n and "codigo" not in mapa:
+            mapa["codigo"] = c
+        elif "DESC" in n and "descricao" not in mapa:
+            mapa["descricao"] = c
+        elif "UNID" in n and "unidade" not in mapa:
+            mapa["unidade"] = c
+    return df, mapa
+
+
+def adicionar_material(arquivo, codigo, descricao, unidade_medida):
+    """
+    Acrescenta uma linha nova ao catálogo de materiais (xlsx) da unidade,
+    preenchendo apenas as colunas de código/descrição/unidade que existirem
+    na planilha. Retorna (ok, mensagem).
+    """
+    df, mapa = mapear_colunas_originais(arquivo)
+
+    if "codigo" not in mapa or "descricao" not in mapa:
+        return False, "A planilha precisa ter colunas de código e descrição para cadastrar materiais."
+
+    codigo = str(codigo).strip().upper()
+    col_codigo = mapa["codigo"]
+    ja_existe = df[col_codigo].astype(str).str.strip().str.upper().eq(codigo).any()
+    if ja_existe:
+        return False, f"Já existe um material cadastrado com o código {codigo}."
+
+    nova_linha = {c: "" for c in df.columns}
+    nova_linha[col_codigo] = codigo
+    nova_linha[mapa["descricao"]] = descricao.strip()
+    if "unidade" in mapa:
+        nova_linha[mapa["unidade"]] = unidade_medida.strip()
+
+    df = pd.concat([df, pd.DataFrame([nova_linha])], ignore_index=True)
+    df.to_excel(arquivo, index=False)
+    return True, f"Material {codigo} cadastrado com sucesso."
+
+
 # =========================
 # TEMA / LAYOUT BASE
 # =========================
@@ -297,6 +344,47 @@ def login(request: Request, erro: str = ""):
 """
 
     corpo = f"""
+<style>
+.password-wrap {{
+    position: relative;
+    width: 100%;
+}}
+.password-wrap .field {{
+    width: 100%;
+    padding-right: 42px;
+    box-sizing: border-box;
+}}
+.toggle-senha {{
+    position: absolute;
+    right: 6px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 0;
+    color: #8a8a8a;
+    opacity: 0.7;
+}}
+.toggle-senha:hover {{ opacity: 1; }}
+.toggle-senha svg {{ width: 20px; height: 20px; }}
+.toggle-senha .icon-off {{ display: none; }}
+.login-alert {{
+    background: #fdecea;
+    color: #b3261e;
+    border: 1px solid #f5c2c0;
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-size: 14px;
+    margin-bottom: 14px;
+    text-align: center;
+}}
+</style>
 <div class="login-wrap">
     <div class="card login-card">
         <img src="/static/logo.png.png">
@@ -307,7 +395,10 @@ def login(request: Request, erro: str = ""):
             <input class="field" name="usuario" placeholder="Usuário" autocomplete="off" value="{usuario_salvo}">
             <div class="password-wrap">
                 <input class="field" id="senha" name="senha" type="password" placeholder="Senha">
-                <button type="button" class="toggle-senha" onclick="alternarSenha()" aria-label="Mostrar senha">👁️</button>
+                <button type="button" class="toggle-senha" onclick="alternarSenha()" aria-label="Mostrar senha">
+                    <svg class="icon-on" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7Z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+                    <svg class="icon-off" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.94 10.94 0 0 1 12 19c-7 0-11-7-11-7a20.3 20.3 0 0 1 4.22-5.19M9.9 4.24A10.94 10.94 0 0 1 12 4c7 0 11 7 11 7a20.29 20.29 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line></svg>
+                </button>
             </div>
             <label class="remember-check">
                 <input type="checkbox" name="lembrar" value="1" {checked}>
@@ -320,7 +411,11 @@ def login(request: Request, erro: str = ""):
 <script>
 function alternarSenha() {{
     const campo = document.getElementById('senha');
-    campo.type = campo.type === 'password' ? 'text' : 'password';
+    const btn = document.querySelector('.toggle-senha');
+    const mostrando = campo.type === 'text';
+    campo.type = mostrando ? 'password' : 'text';
+    btn.querySelector('.icon-on').style.display = mostrando ? '' : 'none';
+    btn.querySelector('.icon-off').style.display = mostrando ? 'none' : '';
 }}
 </script>
 """
@@ -435,6 +530,92 @@ def materiais(request: Request):
 </div>
 """
     return base_html("Materiais", corpo)
+
+
+# =========================
+# CADASTRAR MATERIAL (somente admin)
+# =========================
+@app.get("/materiais/cadastrar", response_class=HTMLResponse)
+def cadastrar_material_form(request: Request, ok: str = "", erro: str = ""):
+    if not request.session.get("user") or usuarios.get(request.session["user"], {}).get("tipo") != "admin":
+        return RedirectResponse("/")
+
+    unidade = unidade_do_usuario(request)
+
+    aviso_html = ""
+    if ok:
+        aviso_html = f'<div class="form-alert form-alert-ok">✅ {ok}</div>'
+    elif erro:
+        aviso_html = f'<div class="form-alert form-alert-erro">⚠️ {erro}</div>'
+
+    corpo = f"""
+<style>
+.form-alert {{
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-size: 14px;
+    margin-bottom: 16px;
+}}
+.form-alert-ok {{
+    background: #e8f5e9;
+    color: #1b6e2b;
+    border: 1px solid #bfe3c4;
+}}
+.form-alert-erro {{
+    background: #fdecea;
+    color: #b3261e;
+    border: 1px solid #f5c2c0;
+}}
+</style>
+<div class="admin-shell">
+    {sidebar("cadastrar", unidade)}
+    <div class="admin-content">
+        <span class="eyebrow">Catálogo · {nome_unidade(unidade)}</span>
+        <h2>➕ Cadastrar material</h2>
+        <p class="page-sub">O material entra direto na planilha de materiais desta unidade.</p>
+
+        <div class="card" style="padding:20px; max-width:480px;">
+            {aviso_html}
+            <form method="post" action="/materiais/cadastrar">
+                <input class="field" name="codigo" placeholder="Código" required>
+                <input class="field" name="descricao" placeholder="Descrição do material" required>
+                <input class="field" name="unidade_medida" placeholder="Unidade (ex: UN, CX, KG)">
+                <button class="btn btn-primary btn-block" type="submit">Cadastrar</button>
+            </form>
+        </div>
+    </div>
+</div>
+"""
+    return base_html("Cadastrar material", corpo)
+
+
+@app.post("/materiais/cadastrar")
+def cadastrar_material_post(
+    request: Request,
+    codigo: str = Form(...),
+    descricao: str = Form(...),
+    unidade_medida: str = Form(""),
+):
+    if not request.session.get("user") or usuarios.get(request.session["user"], {}).get("tipo") != "admin":
+        return RedirectResponse("/")
+
+    unidade = unidade_do_usuario(request)
+    arquivo = arquivo_materiais_da_unidade(unidade)
+
+    if not codigo.strip() or not descricao.strip():
+        return RedirectResponse("/materiais/cadastrar?erro=Preencha+código+e+descrição.", status_code=303)
+
+    try:
+        ok, msg = adicionar_material(arquivo, codigo, descricao, unidade_medida)
+    except FileNotFoundError:
+        return RedirectResponse(
+            f"/materiais/cadastrar?erro=Arquivo+{arquivo}+não+encontrado.", status_code=303
+        )
+
+    from urllib.parse import quote
+    if ok:
+        return RedirectResponse(f"/materiais/cadastrar?ok={quote(msg)}", status_code=303)
+    return RedirectResponse(f"/materiais/cadastrar?erro={quote(msg)}", status_code=303)
 
 
 # =========================
@@ -650,6 +831,7 @@ def sidebar(ativo="dashboard", unidade=None):
     {item("/painel", "📊 Dashboard", "dashboard")}
     {item("/relatorio", "📈 Relatório", "relatorio")}
     {item("/materiais", "📦 Materiais", "materiais")}
+    {item("/materiais/cadastrar", "➕ Cadastrar material", "cadastrar")}
     <a class="nav-link logout" href="/logout">🚪 Sair</a>
 </div>
 """
