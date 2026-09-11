@@ -151,6 +151,7 @@ usuarios = {
     "A07": {"senha": "123", "tipo": "setor", "unidade": "AREAL RECRIA"},
     "A08": {"senha": "123", "tipo": "setor", "unidade": "AREAL RECRIA"},
     "BANHEIRO CENTRAL": {"senha": "123", "tipo": "setor", "unidade": "AREAL RECRIA"},
+    "LIDER MANUTENCAO": {"senha": "123", "tipo": "setor", "unidade": "AREAL RECRIA"},
     # --- Fábrica de Ração ---
     "admin_fabrica": {"senha": "123", "tipo": "admin", "unidade": "FABRICA RACAO"},
     "LIDER PRODUCAO": {"senha": "123", "tipo": "setor", "unidade": "FABRICA RACAO"},
