@@ -1613,4 +1613,3 @@ def recusar(request: Request, id: int):
 def logout(request: Request):
     request.session.clear()
     return RedirectResponse("/")
-```
