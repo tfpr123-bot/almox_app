@@ -1339,7 +1339,7 @@ function filtrar() {{
     const itens =
         document.querySelectorAll('.item');
 
-    itens.forEach(function(item) {{
+    itens.forEach(function(item){{
         const desc =
             item
             .getAttribute('data-desc')
@@ -1360,7 +1360,7 @@ function filtrar() {{
 function selecionar(el) {{
     document
         .querySelectorAll('.item')
-        .forEach(function(i) {{
+        .forEach(function(i){{
             i.classList.remove('is-selected');
         }});
 
@@ -1978,7 +1978,7 @@ def painel(
 
 </div>
 
-<script src="/static/push.js"></script>
+<script src="/static/push.js?v=2"></script>
 """
 
     return base_html(
