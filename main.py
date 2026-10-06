@@ -1,4 +1,3 @@
-```python
 from fastapi import FastAPI, Form, Request
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
