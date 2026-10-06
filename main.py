@@ -5,6 +5,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 import pandas as pd
 import unicodedata
 from datetime import datetime, date, timedelta
+from zoneinfo import ZoneInfo
 import calendar
 import os
 
@@ -939,7 +940,7 @@ def enviar(
             codigo=codigo,
             descricao=str(item[desc]),
             quantidade=quantidade,
-            data=datetime.now().strftime("%d/%m/%Y %H:%M"),
+            data=datetime.now(ZoneInfo("America/Sao_Paulo")).strftime("%d/%m/%Y %H:%M"),
             status="PENDENTE",
         )
 
@@ -1218,7 +1219,9 @@ def relatorio(request: Request, inicio: str = "", fim: str = ""):
         return RedirectResponse("/")
 
     unidade = unidade_do_usuario(request)
-    hoje = date.today()
+
+    # Usa o horário de São Paulo para determinar o dia atual.
+    hoje = datetime.now(ZoneInfo("America/Sao_Paulo")).date()
 
     def parse_data_req(s):
         for fmt in ("%d/%m/%Y %H:%M", "%d/%m/%Y"):
